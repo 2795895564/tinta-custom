@@ -1,0 +1,1927 @@
+#include "markdown.h"
+#include "footnotes.h"
+#include <cstdint>
+#include <md4c.h>
+#include <fstream>
+#include <sstream>
+#include <chrono>
+#include <cstring>
+#include <stack>
+#include <regex>
+#include <unordered_map>
+#include <algorithm>
+#include <cctype>
+
+namespace qmd {
+
+// Extensions that get the live/broken file-reference treatment. The
+// plain-path scanner, explicit [text](target) links, and the click
+// handler (#162) all share this gate. .pdf rides along so a relative
+// link resolves against the document and opens with the registered
+// viewer instead of going through the generic URL route
+const char* const kFileRefExtensions[] = {
+    ".markdown", ".json", ".yaml", ".toml", ".mmd", ".yml",
+    ".ini",      ".csv",  ".log",  ".txt",  ".md",  ".xml",
+    ".pdf",      ".puml", ".plantuml",
+};
+
+static bool endsWithNoCase(const std::string& s, const char* suffix) {
+    size_t len = strlen(suffix);
+    return s.size() > len &&
+           _strnicmp(s.c_str() + s.size() - len, suffix, len) == 0;
+}
+
+bool fileRefKnownExtension(const std::string& path) {
+    for (const char* ext : kFileRefExtensions) {
+        if (endsWithNoCase(path, ext)) return true;
+    }
+    return false;
+}
+
+bool fileRefIsMarkdown(const std::string& path) {
+    return endsWithNoCase(path, ".md") || endsWithNoCase(path, ".mmd") ||
+           endsWithNoCase(path, ".markdown") ||
+           endsWithNoCase(path, ".puml") ||
+           endsWithNoCase(path, ".plantuml");
+}
+
+bool fileRefIsExternal(const std::string& path) {
+    return endsWithNoCase(path, ".pdf");
+}
+
+// Parser context for MD4C callbacks
+struct ParserContext {
+    ElementPtr root;
+    std::stack<Element*> elementStack;
+    std::string currentText;
+    std::vector<size_t> literalBrackets;
+    FootnoteData* notes = nullptr;
+    size_t inputLength = 0;
+    const char* inputStart = nullptr;  // start of markdown source for offset tracking
+    int openAnchors = 0;  // inline <a id> tags of this block awaiting their </a>
+    // Inline <sub>, <sup>, <ins>... spans still open in this block (#263)
+    std::vector<Element*> htmlSpans;
+    // Inline raw HTML waiting for the next callback. md4c hands it over
+    // line by line, with each line break inside it as a "\n" piece of its
+    // own, so a tag or comment spread over lines is only read whole.
+    std::string pendingTag;
+
+    ParserContext() {
+        root = std::make_shared<Element>(ElementType::Document);
+        elementStack.push(root.get());
+    }
+
+    Element* current() {
+        return elementStack.empty() ? nullptr : elementStack.top();
+    }
+
+    void pushElement(ElementPtr elem) {
+        if (Element* parent = current()) {
+            elem->parent = parent;
+            parent->children.push_back(elem);
+            elementStack.push(elem.get());
+        }
+    }
+
+    void popElement() {
+        if (elementStack.size() > 1) {
+            elementStack.pop();
+        }
+    }
+
+    // Close the inline HTML spans opened inside the current Markdown span
+    // or block, as md4c closes it: they cannot outlive it
+    void closeHtmlSpans() {
+        while (!htmlSpans.empty() && current() == htmlSpans.back()) {
+            flushText();
+            popElement();
+            htmlSpans.pop_back();
+        }
+    }
+
+    // A close tag for an open HTML span. Whatever opened inside the span
+    // closes with it, and Markdown spans among those open again right
+    // after, the way a browser reads the misnested <ins>a *b</ins> c*.
+    void closeHtmlSpan(Element* span) {
+        std::vector<Element*> reopen;
+        for (Element* e = current(); e != span; e = e->parent) {
+            // Copying an image or a code span would draw it twice
+            if (!e || e->type == ElementType::Image || e->type == ElementType::Code ||
+                e->type == ElementType::MathInline) {
+                return;
+            }
+            if (std::find(htmlSpans.begin(), htmlSpans.end(), e) == htmlSpans.end()) {
+                reopen.push_back(e);
+            }
+        }
+        flushText();
+        while (current() != span) {
+            htmlSpans.erase(std::remove(htmlSpans.begin(), htmlSpans.end(), current()),
+                            htmlSpans.end());
+            popElement();
+        }
+        popElement();
+        htmlSpans.erase(std::remove(htmlSpans.begin(), htmlSpans.end(), span), htmlSpans.end());
+        for (auto it = reopen.rbegin(); it != reopen.rend(); ++it) {
+            auto copy = std::make_shared<Element>((*it)->type);
+            copy->url = (*it)->url;
+            copy->title = (*it)->title;
+            pushElement(copy);
+        }
+    }
+
+
+    void flushText() {
+        if (!currentText.empty() && current()) {
+            // For HTML blocks, accumulate raw HTML in the element's text field
+            if (current()->type == ElementType::HtmlBlock) {
+                current()->text += currentText;
+            } else if (notes && !notes->definitions.empty()) {
+                appendFootnoteText(current(), currentText, literalBrackets, *notes);
+            } else {
+                auto textElem = std::make_shared<Element>(ElementType::Text);
+                textElem->text = currentText;
+                textElem->parent = current();
+                current()->children.push_back(textElem);
+            }
+            currentText.clear();
+            literalBrackets.clear();
+        }
+    }
+
+    void addText(const char* text, MD_SIZE size) {
+        if (notes && inputStart) {
+            auto start = reinterpret_cast<uintptr_t>(inputStart);
+            auto pointer = reinterpret_cast<uintptr_t>(text);
+            if (pointer >= start && pointer - start < inputLength) {
+                size_t offset = pointer - start;
+                for (size_t i = 0; i < size; ++i) if (text[i] == '[') {
+                    size_t slashes = 0, p = offset + i;
+                    while (p && inputStart[--p] == '\\') ++slashes;
+                    if (slashes % 2) literalBrackets.push_back(currentText.size() + i);
+                }
+            } else {
+                // Raw HTML read whole from its pieces is a copy: its
+                // backslashes are in the text itself
+                for (size_t i = 0; i < size; ++i) if (text[i] == '[') {
+                    size_t slashes = 0, p = i;
+                    while (p && text[--p] == '\\') ++slashes;
+                    if (slashes % 2) literalBrackets.push_back(currentText.size() + i);
+                }
+            }
+        }
+        currentText.append(text, size);
+    }
+};
+
+static void flushPendingHtml(ParserContext* ctx);
+
+// MD4C callbacks
+static int enterBlockCallback(MD_BLOCKTYPE type, void* detail, void* userdata) {
+    auto* ctx = static_cast<ParserContext*>(userdata);
+    flushPendingHtml(ctx);
+    ctx->flushText();
+    ctx->openAnchors = 0;  // inline HTML pairs up within one block
+    // A nested block (a sublist after a tight item's text) ends the
+    // parent's open inline HTML spans rather than landing inside them
+    ctx->closeHtmlSpans();
+    ctx->htmlSpans.clear();
+
+    ElementPtr elem;
+    switch (type) {
+        case MD_BLOCK_DOC:
+            // Root already exists
+            return 0;
+
+        case MD_BLOCK_P:
+            elem = std::make_shared<Element>(ElementType::Paragraph);
+            break;
+
+        case MD_BLOCK_H: {
+            auto* h = static_cast<MD_BLOCK_H_DETAIL*>(detail);
+            elem = std::make_shared<Element>(ElementType::Heading);
+            elem->level = h->level;
+            break;
+        }
+
+        case MD_BLOCK_CODE: {
+            auto* code = static_cast<MD_BLOCK_CODE_DETAIL*>(detail);
+            elem = std::make_shared<Element>(ElementType::CodeBlock);
+            if (code->lang.text && code->lang.size > 0) {
+                elem->language = std::string(code->lang.text, code->lang.size);
+            }
+            break;
+        }
+
+        case MD_BLOCK_QUOTE:
+            elem = std::make_shared<Element>(ElementType::BlockQuote);
+            break;
+
+        case MD_BLOCK_UL:
+            elem = std::make_shared<Element>(ElementType::List);
+            elem->ordered = false;
+            break;
+
+        case MD_BLOCK_OL: {
+            auto* ol = static_cast<MD_BLOCK_OL_DETAIL*>(detail);
+            elem = std::make_shared<Element>(ElementType::List);
+            elem->ordered = true;
+            elem->start = ol->start;
+            break;
+        }
+
+        case MD_BLOCK_LI: {
+            elem = std::make_shared<Element>(ElementType::ListItem);
+            auto* li = static_cast<MD_BLOCK_LI_DETAIL*>(detail);
+            if (li && li->is_task) {
+                elem->isTask = true;
+                elem->taskChecked = (li->task_mark == 'x' || li->task_mark == 'X');
+                elem->taskMarkOffset = li->task_mark_offset;
+            }
+            break;
+        }
+
+        case MD_BLOCK_HR:
+            elem = std::make_shared<Element>(ElementType::HorizontalRule);
+            break;
+
+        case MD_BLOCK_TABLE: {
+            elem = std::make_shared<Element>(ElementType::Table);
+            auto* table = static_cast<MD_BLOCK_TABLE_DETAIL*>(detail);
+            elem->col_count = (int)table->col_count;
+            break;
+        }
+
+        case MD_BLOCK_THEAD:
+        case MD_BLOCK_TBODY:
+            // Skip these, handle rows directly
+            return 0;
+
+        case MD_BLOCK_TR:
+            elem = std::make_shared<Element>(ElementType::TableRow);
+            break;
+
+        case MD_BLOCK_TH:
+        case MD_BLOCK_TD: {
+            elem = std::make_shared<Element>(ElementType::TableCell);
+            auto* td = static_cast<MD_BLOCK_TD_DETAIL*>(detail);
+            elem->align = (int)td->align;
+            break;
+        }
+
+        case MD_BLOCK_HTML:
+            elem = std::make_shared<Element>(ElementType::HtmlBlock);
+            break;
+
+        default:
+            return 0;
+    }
+
+    if (elem) {
+        ctx->pushElement(elem);
+    }
+    return 0;
+}
+
+static int leaveBlockCallback(MD_BLOCKTYPE type, void* /*detail*/, void* userdata) {
+    auto* ctx = static_cast<ParserContext*>(userdata);
+    flushPendingHtml(ctx);
+    ctx->flushText();
+    // An unclosed <sub> or <ins> ends with its block, as in a browser
+    ctx->closeHtmlSpans();
+    ctx->htmlSpans.clear();
+
+    switch (type) {
+        case MD_BLOCK_DOC:
+        case MD_BLOCK_THEAD:
+        case MD_BLOCK_TBODY:
+            return 0;
+        case MD_BLOCK_HTML: {
+            // Parse HTML content and convert to elements
+            Element* htmlBlock = ctx->current();
+            if (htmlBlock && htmlBlock->type == ElementType::HtmlBlock && !htmlBlock->text.empty()) {
+                parseHtmlIntoElements(htmlBlock->text, htmlBlock);
+                htmlBlock->text.clear(); // Clear raw HTML after parsing
+            }
+            ctx->popElement();
+            break;
+        }
+        default:
+            ctx->popElement();
+            break;
+    }
+    return 0;
+}
+
+static int enterSpanCallback(MD_SPANTYPE type, void* detail, void* userdata) {
+    auto* ctx = static_cast<ParserContext*>(userdata);
+    flushPendingHtml(ctx);
+    ctx->flushText();
+
+    ElementPtr elem;
+    switch (type) {
+        case MD_SPAN_EM:
+            elem = std::make_shared<Element>(ElementType::Emphasis);
+            break;
+
+        case MD_SPAN_STRONG:
+            elem = std::make_shared<Element>(ElementType::Strong);
+            break;
+
+        case MD_SPAN_CODE:
+            elem = std::make_shared<Element>(ElementType::Code);
+            break;
+
+        case MD_SPAN_LATEXMATH:
+            elem = std::make_shared<Element>(ElementType::MathInline);
+            break;
+
+        case MD_SPAN_LATEXMATH_DISPLAY:
+            elem = std::make_shared<Element>(ElementType::MathDisplay);
+            break;
+
+        case MD_SPAN_A: {
+            auto* a = static_cast<MD_SPAN_A_DETAIL*>(detail);
+            elem = std::make_shared<Element>(ElementType::Link);
+            if (a->href.text && a->href.size > 0) {
+                elem->url = std::string(a->href.text, a->href.size);
+            }
+            if (a->title.text && a->title.size > 0) {
+                elem->title = std::string(a->title.text, a->title.size);
+            }
+            break;
+        }
+
+        case MD_SPAN_IMG: {
+            auto* img = static_cast<MD_SPAN_IMG_DETAIL*>(detail);
+            elem = std::make_shared<Element>(ElementType::Image);
+            if (img->src.text && img->src.size > 0) {
+                elem->url = std::string(img->src.text, img->src.size);
+            }
+            if (img->title.text && img->title.size > 0) {
+                elem->title = std::string(img->title.text, img->title.size);
+            }
+            break;
+        }
+
+        default:
+            return 0;
+    }
+
+    if (elem) {
+        ctx->pushElement(elem);
+    }
+    return 0;
+}
+
+static int leaveSpanCallback(MD_SPANTYPE type, void* /*detail*/, void* userdata) {
+    auto* ctx = static_cast<ParserContext*>(userdata);
+    flushPendingHtml(ctx);
+    ctx->flushText();
+
+    switch (type) {
+        case MD_SPAN_EM:
+        case MD_SPAN_STRONG:
+        case MD_SPAN_CODE:
+        case MD_SPAN_A:
+        case MD_SPAN_IMG:
+        case MD_SPAN_LATEXMATH:
+        case MD_SPAN_LATEXMATH_DISPLAY:
+            ctx->closeHtmlSpans();
+            ctx->popElement();
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+// Matches <br>, <br/>, <br /> etc., case-insensitively
+static bool isBrTag(const MD_CHAR* text, MD_SIZE size) {
+    if (size < 4 || text[0] != '<' || text[size - 1] != '>') return false;
+    std::string norm;
+    for (MD_SIZE i = 0; i < size; i++) {
+        if (!isspace((unsigned char)text[i])) norm += (char)tolower((unsigned char)text[i]);
+    }
+    return norm == "<br>" || norm == "<br/>";
+}
+
+// Some Markdown producers wrap every cell and paragraph in a presentational
+// <font> tag. It has no semantic value for the native renderer, and keeping
+// it in a Text node makes the tag visible and inflates table column widths.
+static bool isTransparentFontTag(const MD_CHAR* text, MD_SIZE size) {
+    if (size < 6 || text[0] != '<' || text[size - 1] != '>') return false;
+
+    MD_SIZE nameStart = 1;
+    if (text[nameStart] == '/') nameStart++;
+    if (nameStart + 4 >= size) return false;
+    if (tolower((unsigned char)text[nameStart]) != 'f' ||
+        tolower((unsigned char)text[nameStart + 1]) != 'o' ||
+        tolower((unsigned char)text[nameStart + 2]) != 'n' ||
+        tolower((unsigned char)text[nameStart + 3]) != 't') {
+        return false;
+    }
+
+    // Do not mistake tags such as <fontface> for <font>.
+    MD_SIZE afterName = nameStart + 4;
+    return afterName == size - 1 ||
+           isspace((unsigned char)text[afterName]) ||
+           text[afterName] == '/';
+}
+
+// Inline HTML that has a native span (#263): <sub>, <sup>, <ins> and <u>
+// (underline), <del>, <s> and <strike>, <mark>. The opening tag may carry
+// attributes; self-closing forms such as <sub/> mean nothing.
+static bool htmlSpanTag(const MD_CHAR* text, MD_SIZE size, ElementType& type, bool& closing) {
+    if (size < 3 || text[0] != '<' || text[size - 1] != '>') return false;
+    MD_SIZE i = 1;
+    closing = text[i] == '/';
+    if (closing) i++;
+    std::string name;
+    while (i < size - 1 && isalpha((unsigned char)text[i])) {
+        name += (char)tolower((unsigned char)text[i++]);
+    }
+    const std::string rest(text + i, size - 1 - i);
+    if (!rest.empty() && !isspace((unsigned char)rest[0])) return false;
+    size_t last = rest.find_last_not_of(" \t\r\n");
+    if (last != std::string::npos && (closing || rest[last] == '/')) return false;
+    // A '>' inside a quoted attribute value does not end the tag
+    char quote = 0;
+    for (char c : rest) {
+        if (quote) { if (c == quote) quote = 0; }
+        else if (c == '"' || c == '\'') quote = c;
+    }
+    if (quote) return false;
+    static const std::pair<const char*, ElementType> kTags[] = {
+        {"sub", ElementType::Subscript},     {"sup", ElementType::Superscript},
+        {"ins", ElementType::Underline},     {"u", ElementType::Underline},
+        {"del", ElementType::Strikethrough}, {"s", ElementType::Strikethrough},
+        {"strike", ElementType::Strikethrough}, {"mark", ElementType::Highlight},
+    };
+    for (const auto& tag : kTags) {
+        if (name == tag.first) {
+            type = tag.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+// <a id="x"> or <a name="x"> without an href only marks a link target, the
+// way documents written for GitHub link into themselves (#255). Close is a
+// bare </a>; Open and SelfClosed set the target's id.
+enum class AnchorTag { None, Open, SelfClosed, Close };
+
+static AnchorTag anchorTag(const MD_CHAR* text, MD_SIZE size, std::string& id) {
+    if (size < 4 || text[0] != '<' || text[size - 1] != '>') return AnchorTag::None;
+    const std::string tag(text + 1, size - 2);
+    if (tag[0] == '/') {
+        size_t end = tag.find_last_not_of(" \t\r\n");
+        return end == 1 && tolower((unsigned char)tag[1]) == 'a' ? AnchorTag::Close
+                                                                 : AnchorTag::None;
+    }
+    if (tolower((unsigned char)tag[0]) != 'a' ||
+        (tag.size() > 1 && !isspace((unsigned char)tag[1]) && tag[1] != '/')) {
+        return AnchorTag::None;
+    }
+    std::string idValue, nameValue;
+    bool href = false;
+    size_t i = 1;
+    while (i < tag.size()) {
+        while (i < tag.size() && (isspace((unsigned char)tag[i]) || tag[i] == '/')) i++;
+        size_t nameStart = i;
+        while (i < tag.size() && !isspace((unsigned char)tag[i]) && tag[i] != '=' &&
+               tag[i] != '/') {
+            i++;
+        }
+        std::string attr = tag.substr(nameStart, i - nameStart);
+        for (char& c : attr) c = (char)tolower((unsigned char)c);
+        while (i < tag.size() && isspace((unsigned char)tag[i])) i++;
+        std::string value;
+        if (i < tag.size() && tag[i] == '=') {
+            i++;
+            while (i < tag.size() && isspace((unsigned char)tag[i])) i++;
+            if (i < tag.size() && (tag[i] == '"' || tag[i] == '\'')) {
+                size_t close = tag.find(tag[i], i + 1);
+                if (close == std::string::npos) close = tag.size();
+                value = tag.substr(i + 1, close - i - 1);
+                i = close + 1;
+            } else {
+                size_t valueStart = i;
+                while (i < tag.size() && !isspace((unsigned char)tag[i])) i++;
+                value = tag.substr(valueStart, i - valueStart);
+            }
+        }
+        if (attr == "href") href = true;
+        else if (attr == "id") idValue = value;
+        else if (attr == "name") nameValue = value;
+    }
+    id = !idValue.empty() ? idValue : nameValue;
+    if (href || id.empty()) return AnchorTag::None;
+    return tag.back() == '/' ? AnchorTag::SelfClosed : AnchorTag::Open;
+}
+
+// Whether a raw HTML piece from md4c is a whole tag: it ends with '>'
+// outside any quoted attribute value. Comments and declarations end at
+// their own '>' whatever quotes they hold.
+static bool rawTagComplete(const std::string& tag) {
+    if (tag.empty() || tag.back() != '>') return false;
+    if (tag.size() > 1 && (tag[1] == '!' || tag[1] == '?')) return true;
+    char quote = 0;
+    for (char c : tag) {
+        if (quote) { if (c == quote) quote = 0; }
+        else if (c == '"' || c == '\'') quote = c;
+    }
+    return quote == 0;
+}
+
+// Raw HTML met inside a paragraph, heading or cell: the tags Tinta draws
+// natively become elements, the rest stays literal text
+static void inlineHtml(ParserContext* ctx, const MD_CHAR* text, MD_SIZE size) {
+    // Inline <br> becomes a hard line break (#45)
+    if (ctx->current() && ctx->current()->type != ElementType::HtmlBlock &&
+        isBrTag(text, size)) {
+        ctx->flushText();
+        auto elem = std::make_shared<Element>(ElementType::HardBreak);
+        elem->parent = ctx->current();
+        ctx->current()->children.push_back(elem);
+        return;
+    }
+    if (ctx->current() && ctx->current()->type != ElementType::HtmlBlock &&
+        isTransparentFontTag(text, size)) {
+        return;
+    }
+    if (ctx->current() && ctx->current()->type != ElementType::HtmlBlock) {
+        std::string id;
+        AnchorTag anchor = anchorTag(text, size, id);
+        if (anchor == AnchorTag::Open || anchor == AnchorTag::SelfClosed) {
+            ctx->flushText();
+            auto elem = std::make_shared<Element>(ElementType::Anchor);
+            elem->title = id;
+            elem->parent = ctx->current();
+            ctx->current()->children.push_back(elem);
+            if (anchor == AnchorTag::Open) ctx->openAnchors++;
+            return;
+        }
+        // Only the </a> of an anchor goes; others stay literal text
+        if (anchor == AnchorTag::Close && ctx->openAnchors > 0) {
+            ctx->openAnchors--;
+            return;
+        }
+        ElementType spanType;
+        bool closing = false;
+        if (htmlSpanTag(text, size, spanType, closing)) {
+            if (!closing) {
+                ctx->flushText();
+                auto elem = std::make_shared<Element>(spanType);
+                ctx->pushElement(elem);
+                ctx->htmlSpans.push_back(elem.get());
+                return;
+            }
+            // The innermost open span of this kind takes the close tag; a
+            // stray one draws nothing, as on GitHub
+            auto open = std::find_if(ctx->htmlSpans.rbegin(), ctx->htmlSpans.rend(),
+                [&](const Element* span) { return span->type == spanType; });
+            if (open != ctx->htmlSpans.rend()) ctx->closeHtmlSpan(*open);
+            return;
+        }
+    }
+    ctx->addText(text, size);
+}
+
+// Reads the raw HTML waiting in pendingTag. A tag spread over lines is
+// still one tag; anything else spread over lines, such as a comment,
+// stays literal text whatever tags it mentions.
+static void flushPendingHtml(ParserContext* ctx) {
+    if (ctx->pendingTag.empty()) return;
+    std::string html;
+    html.swap(ctx->pendingTag);
+    bool tag = html.size() > 1 && html[0] == '<' &&
+               (isalpha((unsigned char)html[1]) || html[1] == '/');
+    if (html.find('\n') != std::string::npos && !(tag && rawTagComplete(html))) {
+        ctx->addText(html.data(), (MD_SIZE)html.size());
+        return;
+    }
+    inlineHtml(ctx, html.data(), (MD_SIZE)html.size());
+}
+
+static int textCallback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata) {
+    auto* ctx = static_cast<ParserContext*>(userdata);
+
+    // Track source offset: set on the current element if not already set
+    if (ctx->inputStart && ctx->current() && ctx->current()->sourceOffset == SIZE_MAX) {
+        ctx->current()->sourceOffset = (size_t)(text - ctx->inputStart);
+    }
+
+    if (type != MD_TEXT_HTML) flushPendingHtml(ctx);
+
+    switch (type) {
+        case MD_TEXT_HTML:
+            // Raw HTML inside an HtmlBlock keeps accumulating so
+            // parseHtmlIntoElements sees it all
+            if (ctx->current() && ctx->current()->type != ElementType::HtmlBlock) {
+                // A line break, or the blanks before it, continues the
+                // element before it, and so does the line after one
+                bool blank = true;
+                for (MD_SIZE k = 0; k < size && blank; k++) {
+                    blank = text[k] == ' ' || text[k] == '\t' || text[k] == '\n';
+                }
+                bool continues = !ctx->pendingTag.empty() &&
+                                 (blank || ctx->pendingTag.back() == '\n');
+                if (!continues) flushPendingHtml(ctx);
+                ctx->pendingTag.append(text, size);
+                break;
+            }
+            inlineHtml(ctx, text, size);
+            break;
+        case MD_TEXT_NORMAL:
+        case MD_TEXT_CODE:
+            ctx->addText(text, size);
+            break;
+
+        case MD_TEXT_LATEXMATH:
+            // Raw TeX accumulates directly on the math span element
+            if (ctx->current() &&
+                (ctx->current()->type == ElementType::MathInline ||
+                 ctx->current()->type == ElementType::MathDisplay)) {
+                ctx->current()->text.append(text, size);
+            } else {
+                ctx->addText(text, size);
+            }
+            break;
+
+        case MD_TEXT_SOFTBR:
+            ctx->flushText();
+            {
+                auto elem = std::make_shared<Element>(ElementType::SoftBreak);
+                elem->parent = ctx->current();
+                if (ctx->current()) {
+                    ctx->current()->children.push_back(elem);
+                }
+            }
+            break;
+
+        case MD_TEXT_BR:
+            ctx->flushText();
+            {
+                auto elem = std::make_shared<Element>(ElementType::HardBreak);
+                elem->parent = ctx->current();
+                if (ctx->current()) {
+                    ctx->current()->children.push_back(elem);
+                }
+            }
+            break;
+
+        case MD_TEXT_ENTITY:
+            // Convert HTML entities
+            if (size == 4 && strncmp(text, "&lt;", 4) == 0) {
+                ctx->addText("<", 1);
+            } else if (size == 4 && strncmp(text, "&gt;", 4) == 0) {
+                ctx->addText(">", 1);
+            } else if (size == 5 && strncmp(text, "&amp;", 5) == 0) {
+                ctx->addText("&", 1);
+            } else if (size == 6 && strncmp(text, "&quot;", 6) == 0) {
+                ctx->addText("\"", 1);
+            } else if (size == 6 && strncmp(text, "&nbsp;", 6) == 0) {
+                ctx->addText(" ", 1);
+            } else {
+                // Pass through unknown entities
+                ctx->addText(text, size);
+            }
+            break;
+
+        default:
+            ctx->addText(text, size);
+            break;
+    }
+    return 0;
+}
+
+// MarkdownParser implementation
+// --- Inline extension post-pass (==highlight==, ^sup^, ~sub~) ---
+//
+// md4c has no extension hooks for these Obsidian/Typora spans, so a pass
+// over the finished tree splits Text nodes, keeping intervening inline
+// math opaque. Code spans, code blocks, and Mermaid sources are never touched.
+
+namespace {
+
+struct ExtensionMatch {
+    size_t start;       // index of the opening delimiter
+    size_t contentLen;  // bytes between the delimiters
+    size_t delimLen;    // 2 for ==, 1 for ^ and ~
+    ElementType type;
+};
+
+// Find the first extension span at or after `from`. Delimiters are ASCII,
+// so byte scanning is UTF-8 safe.
+static bool findExtensionSpan(const std::string& text, size_t from, ExtensionMatch& match) {
+    for (size_t i = from; i < text.size(); i++) {
+        char c = text[i];
+        if (c == '=' && i + 1 < text.size() && text[i + 1] == '=') {
+            size_t close = text.find("==", i + 2);
+            if (close != std::string::npos && close > i + 2) {
+                match = {i, close - (i + 2), 2, ElementType::Highlight};
+                return true;
+            }
+        } else if (c == '~' && i + 1 < text.size() && text[i + 1] == '~') {
+            size_t close = text.find("~~", i + 2);
+            if (close != std::string::npos && close > i + 2) {
+                match = {i, close - (i + 2), 2, ElementType::Strikethrough};
+                return true;
+            }
+            // No closing ~~: fall through to try a single-tilde subscript
+            size_t single = text.find('~', i + 2);
+            if (single == std::string::npos) continue;
+            i++;  // retry from the second tilde as a potential single opener
+            continue;
+        } else if (c == '^' || c == '~') {
+            if (c == '^' && i && text[i - 1] == '[') continue;
+            size_t close = text.find(c, i + 1);
+            if (close == std::string::npos || close == i + 1) continue;
+            // Typora rule: no whitespace inside sup/sub spans
+            bool hasSpace = false;
+            for (size_t j = i + 1; j < close; j++) {
+                unsigned char uc = static_cast<unsigned char>(text[j]);
+                if (uc == ' ' || uc == '\t' || uc == '\n') { hasSpace = true; break; }
+            }
+            if (hasSpace) continue;
+            match = {i, close - (i + 1), 1,
+                     c == '^' ? ElementType::Superscript : ElementType::Subscript};
+            return true;
+        }
+    }
+    return false;
+}
+
+static ElementPtr makeTextElement(std::string text, Element* parent) {
+    auto node = std::make_shared<Element>(ElementType::Text);
+    node->text = std::move(text);
+    node->parent = parent;
+    return node;
+}
+
+// GitHub alerts: a blockquote whose first line is exactly [!NOTE], [!TIP],
+// [!IMPORTANT], [!WARNING] or [!CAUTION] renders as a styled callout.
+// The marker must be alone on its line, matching github.com behavior.
+static void detectGitHubAlerts(const ElementPtr& parent) {
+    static const char* MARKERS[] = {"[!note]", "[!tip]", "[!important]", "[!warning]", "[!caution]"};
+
+    for (auto& child : parent->children) {
+        detectGitHubAlerts(child);
+    }
+
+    if (parent->type != ElementType::BlockQuote || parent->children.empty()) return;
+    const ElementPtr& para = parent->children.front();
+    if (para->type != ElementType::Paragraph || para->children.empty()) return;
+    const ElementPtr& first = para->children.front();
+    if (first->type != ElementType::Text) return;
+
+    std::string marker = first->text;
+    while (!marker.empty() && (marker.back() == ' ' || marker.back() == '\t')) marker.pop_back();
+    for (auto& c : marker) c = (char)tolower((unsigned char)c);
+
+    int kind = 0;
+    for (int i = 0; i < 5; i++) {
+        if (marker == MARKERS[i]) { kind = i + 1; break; }
+    }
+    if (kind == 0) return;
+
+    // Marker must be the whole first line: alone in the paragraph, or
+    // followed by a line break
+    if (para->children.size() > 1 &&
+        para->children[1]->type != ElementType::SoftBreak &&
+        para->children[1]->type != ElementType::HardBreak) {
+        return;
+    }
+
+    parent->alertKind = kind;
+    size_t remove = std::min<size_t>(2, para->children.size());  // marker text + line break
+    para->children.erase(para->children.begin(), para->children.begin() + remove);
+    if (para->children.empty()) {
+        parent->children.erase(parent->children.begin());
+    }
+}
+
+// Inline HTML spans (#263) sit inside a run of text the post-passes read
+// as one string, so ~~H<sub>2</sub>O~~ and [[Water|H<sub>2</sub>O]] still
+// pair. At this point these element types only come from inline HTML.
+static bool isInlineHtmlSpan(ElementType type) {
+    return type == ElementType::Subscript || type == ElementType::Superscript ||
+           type == ElementType::Underline || type == ElementType::Strikethrough ||
+           type == ElementType::Highlight;
+}
+
+// Adjacent siblings [begin, end) read as one string: text as itself, any
+// other part (math, an inline HTML span) as one opaque \x01. append()
+// hands out pieces of that string in order, moving opaque parts whole.
+class SiblingRun {
+public:
+    SiblingRun(const ElementPtr& parent, size_t begin, size_t end)
+        : parent_(parent), begin_(begin) {
+        if (end == begin + 1 && parent->children[begin]->type == ElementType::Text) {
+            single_ = &parent->children[begin]->text;  // the usual case: no copy
+            return;
+        }
+        offsets_.push_back(0);
+        for (size_t j = begin; j < end; ++j) {
+            const auto& part = parent->children[j];
+            if (part->type == ElementType::Text) combined_ += part->text;
+            else combined_ += '\x01';
+            offsets_.push_back(combined_.size());
+        }
+    }
+
+    const std::string& text() const { return single_ ? *single_ : combined_; }
+
+    void append(size_t start, size_t end, const ElementPtr& owner, std::vector<ElementPtr>& output) {
+        if (single_) {
+            if (end > start) output.push_back(makeTextElement(single_->substr(start, end - start), owner.get()));
+            return;
+        }
+        while (partIndex_ + 1 < offsets_.size() && offsets_[partIndex_] < end) {
+            size_t lo = std::max(start, offsets_[partIndex_]);
+            size_t hi = std::min(end, offsets_[partIndex_ + 1]);
+            if (lo < hi) {
+                auto part = parent_->children[begin_ + partIndex_];
+                if (part->type == ElementType::Text) {
+                    output.push_back(makeTextElement(combined_.substr(lo, hi - lo), owner.get()));
+                } else {
+                    part->parent = owner.get();
+                    output.push_back(part);
+                }
+            }
+            if (offsets_[partIndex_ + 1] > end) break;
+            ++partIndex_;
+        }
+    }
+
+private:
+    const ElementPtr& parent_;
+    size_t begin_;
+    const std::string* single_ = nullptr;
+    std::string combined_;
+    std::vector<size_t> offsets_;
+    size_t partIndex_ = 0;
+};
+
+static void splitInlineExtensions(const ElementPtr& parent) {
+    if (parent->type == ElementType::Code ||
+        parent->type == ElementType::CodeBlock ||
+        parent->type == ElementType::MermaidDiagram) {
+        return;
+    }
+
+    // TeX and inline HTML spans are opaque atoms between text nodes:
+    // ==before $x$ after== wraps the equation without interpreting
+    // delimiters inside it. Markdown wrappers and block boundaries keep
+    // their existing scope.
+    auto inRun = [](ElementType type) {
+        return type == ElementType::Text || type == ElementType::MathInline || isInlineHtmlSpan(type);
+    };
+    std::vector<ElementPtr> rebuilt;
+    bool changed = false;
+    for (size_t i = 0; i < parent->children.size();) {
+        auto child = parent->children[i];
+        if (!inRun(child->type)) {
+            splitInlineExtensions(child);
+            rebuilt.push_back(child);
+            ++i;
+            continue;
+        }
+        size_t begin = i;
+        while (i < parent->children.size() && inRun(parent->children[i]->type)) {
+            // A span's own text is split first, then it moves whole
+            if (isInlineHtmlSpan(parent->children[i]->type)) splitInlineExtensions(parent->children[i]);
+            ++i;
+        }
+        if (i == begin + 1 && child->type != ElementType::Text) {
+            rebuilt.push_back(child);
+            continue;
+        }
+        SiblingRun run(parent, begin, i);
+        const std::string& text = run.text();
+        size_t cursor = 0;
+        ExtensionMatch m;
+        bool any = false;
+        while (findExtensionSpan(text, cursor, m)) {
+            any = true;
+            run.append(cursor, m.start, parent, rebuilt);
+            auto span = std::make_shared<Element>(m.type);
+            span->parent = parent.get();
+            run.append(m.start + m.delimLen, m.start + m.delimLen + m.contentLen,
+                       span, span->children);
+            rebuilt.push_back(std::move(span));
+            cursor = m.start + m.delimLen + m.contentLen + m.delimLen;
+        }
+        if (!any) {
+            rebuilt.insert(rebuilt.end(), parent->children.begin() + begin,
+                           parent->children.begin() + i);
+            continue;
+        }
+        changed = true;
+        run.append(cursor, text.size(), parent, rebuilt);
+    }
+    if (changed) parent->children = std::move(rebuilt);
+}
+
+// Obsidian [[wiki links]]: [[Target]] and [[Target|shown text]] become
+// Link elements with a wiki: scheme URL; the click handler resolves the
+// target against the current file's folder. Runs after the extension
+// splitter, skipping code the same way. The shown text may hold inline
+// HTML spans; the target is plain text.
+static void splitWikiLinks(const ElementPtr& parent) {
+    if (parent->type == ElementType::Code ||
+        parent->type == ElementType::CodeBlock ||
+        parent->type == ElementType::MermaidDiagram ||
+        parent->type == ElementType::Link) {
+        return;
+    }
+
+    auto inRun = [](ElementType type) { return type == ElementType::Text || isInlineHtmlSpan(type); };
+    std::vector<ElementPtr> rebuilt;
+    bool changed = false;
+    for (size_t i = 0; i < parent->children.size();) {
+        auto child = parent->children[i];
+        if (!inRun(child->type)) {
+            splitWikiLinks(child);
+            rebuilt.push_back(child);
+            ++i;
+            continue;
+        }
+        size_t begin = i;
+        while (i < parent->children.size() && inRun(parent->children[i]->type)) {
+            if (parent->children[i]->type != ElementType::Text) splitWikiLinks(parent->children[i]);
+            ++i;
+        }
+        if (i == begin + 1 && child->type != ElementType::Text) {
+            rebuilt.push_back(child);
+            continue;
+        }
+
+        SiblingRun run(parent, begin, i);
+        const std::string& text = run.text();
+        size_t cursor = 0;  // end of the text handed out so far
+        size_t from = 0;    // where the next [[ is looked for
+        bool any = false;
+        while (true) {
+            size_t open = text.find("[[", from);
+            if (open == std::string::npos) break;
+            size_t close = text.find("]]", open + 2);
+            if (close == std::string::npos) break;
+            std::string inner = text.substr(open + 2, close - open - 2);
+            if (inner.empty() || inner.find('\n') != std::string::npos) {
+                from = open + 2;
+                continue;
+            }
+            size_t pipe = inner.find('|');
+            std::string target = pipe == std::string::npos ? inner : inner.substr(0, pipe);
+            size_t shownStart = pipe == std::string::npos ? open + 2 : open + 2 + pipe + 1;
+            if (target.empty() || shownStart >= close ||
+                target.find('\x01') != std::string::npos) {
+                from = open + 2;
+                continue;
+            }
+            any = true;
+            run.append(cursor, open, parent, rebuilt);
+            auto link = std::make_shared<Element>(ElementType::Link);
+            link->parent = parent.get();
+            link->url = "wiki:" + target;
+            // The brackets, the target and its pipe are left out
+            run.append(shownStart, close, link, link->children);
+            rebuilt.push_back(std::move(link));
+            cursor = from = close + 2;
+        }
+        if (!any) {
+            rebuilt.insert(rebuilt.end(), parent->children.begin() + begin,
+                           parent->children.begin() + i);
+            continue;
+        }
+        changed = true;
+        run.append(cursor, text.size(), parent, rebuilt);
+    }
+    if (changed) parent->children = std::move(rebuilt);
+}
+
+// Plain-text references to local Markdown files ("docs/auth.md",
+// "./setup.md") become fileref: Link elements; layout resolves the target
+// against the current file's folder and badges it live or broken (#127).
+// Agent-written notes drop these in constantly without wrapping them as
+// links. Runs after the wiki pass, skipping code the same way.
+
+static bool isFileRefChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' ||
+           c == '-' || c == '.' || c == '/' || c == '\\' || c == '~' ||
+           c == ':';
+}
+
+// The extension ends at `end` (exclusive): the next character must not
+// extend the file name (".mdx", "setup.md.bak" are different files; a
+// sentence-ending ".md." is fine)
+static bool fileRefBoundary(const std::string& text, size_t end) {
+    if (end >= text.size()) return true;
+    char next = text[end];
+    if (std::isalnum(static_cast<unsigned char>(next)) || next == '_' ||
+        next == '-') {
+        return false;
+    }
+    if (next == '.' && end + 1 < text.size() &&
+        std::isalnum(static_cast<unsigned char>(text[end + 1]))) {
+        return false;
+    }
+    return true;
+}
+
+// Token shape check: a plausible local path, not a URL, not UNC (a dead
+// server would stall the existence check), drive colon only as "C:"
+static bool isFileRefToken(const std::string& token, size_t extLength) {
+    if (token.size() <= extLength) return false;  // bare ".md"
+    if (token.find("://") != std::string::npos) return false;
+    if (token.rfind("//", 0) == 0 || token.rfind("\\\\", 0) == 0) {
+        return false;
+    }
+    char beforeExt = token[token.size() - extLength - 1];
+    if (beforeExt == '/' || beforeExt == '\\') return false;  // "docs/.md"
+    for (size_t i = 0; i < token.size(); i++) {
+        if (token[i] == ':' &&
+            !(i == 1 && std::isalpha(static_cast<unsigned char>(token[0])))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// GitHub-style :shortcode: emoji. Names are the common GitHub set; the
+// replacements are UTF-8 byte sequences (DirectWrite's emoji fallback
+// renders them in color).
+struct EmojiEntry {
+    const char* name;
+    const char* utf8;
+};
+static const EmojiEntry kEmoji[] = {
+    {"+1", "\xF0\x9F\x91\x8D"}, {"-1", "\xF0\x9F\x91\x8E"},
+    {"100", "\xF0\x9F\x92\xAF"}, {"airplane", "\xE2\x9C\x88\xEF\xB8\x8F"},
+    {"alarm_clock", "\xE2\x8F\xB0"}, {"alien", "\xF0\x9F\x91\xBD"},
+    {"anchor", "\xE2\x9A\x93"}, {"angry", "\xF0\x9F\x98\xA0"},
+    {"arrow_down", "\xE2\xAC\x87\xEF\xB8\x8F"},
+    {"arrow_left", "\xE2\xAC\x85\xEF\xB8\x8F"},
+    {"arrow_right", "\xE2\x9E\xA1\xEF\xB8\x8F"},
+    {"arrow_up", "\xE2\xAC\x86\xEF\xB8\x8F"},
+    {"art", "\xF0\x9F\x8E\xA8"}, {"balloon", "\xF0\x9F\x8E\x88"},
+    {"bar_chart", "\xF0\x9F\x93\x8A"}, {"battery", "\xF0\x9F\x94\x8B"},
+    {"bear", "\xF0\x9F\x90\xBB"}, {"bee", "\xF0\x9F\x90\x9D"},
+    {"beer", "\xF0\x9F\x8D\xBA"}, {"bell", "\xF0\x9F\x94\x94"},
+    {"bike", "\xF0\x9F\x9A\xB2"}, {"birthday", "\xF0\x9F\x8E\x82"},
+    {"blossom", "\xF0\x9F\x8C\xBC"}, {"blue_circle", "\xF0\x9F\x94\xB5"},
+    {"bomb", "\xF0\x9F\x92\xA3"}, {"book", "\xF0\x9F\x93\x96"},
+    {"bookmark", "\xF0\x9F\x94\x96"}, {"books", "\xF0\x9F\x93\x9A"},
+    {"boom", "\xF0\x9F\x92\xA5"}, {"brain", "\xF0\x9F\xA7\xA0"},
+    {"bug", "\xF0\x9F\x90\x9B"}, {"bulb", "\xF0\x9F\x92\xA1"},
+    {"bus", "\xF0\x9F\x9A\x8C"}, {"butterfly", "\xF0\x9F\xA6\x8B"},
+    {"cake", "\xF0\x9F\x8D\xB0"}, {"calendar", "\xF0\x9F\x93\x85"},
+    {"camera", "\xF0\x9F\x93\xB7"}, {"candle", "\xF0\x9F\x95\xAF\xEF\xB8\x8F"},
+    {"car", "\xF0\x9F\x9A\x97"}, {"cat", "\xF0\x9F\x90\xB1"},
+    {"cd", "\xF0\x9F\x92\xBF"},
+    {"chart_with_downwards_trend", "\xF0\x9F\x93\x89"},
+    {"chart_with_upwards_trend", "\xF0\x9F\x93\x88"},
+    {"checkered_flag", "\xF0\x9F\x8F\x81"},
+    {"clap", "\xF0\x9F\x91\x8F"}, {"clapper", "\xF0\x9F\x8E\xAC"},
+    {"clipboard", "\xF0\x9F\x93\x8B"},
+    {"cloud", "\xE2\x98\x81\xEF\xB8\x8F"},
+    {"clown_face", "\xF0\x9F\xA4\xA1"}, {"coffee", "\xE2\x98\x95"},
+    {"comet", "\xE2\x98\x84\xEF\xB8\x8F"},
+    {"computer", "\xF0\x9F\x92\xBB"},
+    {"construction", "\xF0\x9F\x9A\xA7"},
+    {"crescent_moon", "\xF0\x9F\x8C\x99"},
+    {"crossed_fingers", "\xF0\x9F\xA4\x9E"}, {"crown", "\xF0\x9F\x91\x91"},
+    {"cry", "\xF0\x9F\x98\xA2"}, {"dart", "\xF0\x9F\x8E\xAF"},
+    {"date", "\xF0\x9F\x93\x85"}, {"deciduous_tree", "\xF0\x9F\x8C\xB3"},
+    {"desktop_computer", "\xF0\x9F\x96\xA5\xEF\xB8\x8F"},
+    {"dog", "\xF0\x9F\x90\xB6"}, {"dollar", "\xF0\x9F\x92\xB5"},
+    {"electric_plug", "\xF0\x9F\x94\x8C"},
+    {"email", "\xE2\x9C\x89\xEF\xB8\x8F"},
+    {"envelope", "\xE2\x9C\x89\xEF\xB8\x8F"},
+    {"evergreen_tree", "\xF0\x9F\x8C\xB2"},
+    {"exclamation", "\xE2\x9D\x97"}, {"eyes", "\xF0\x9F\x91\x80"},
+    {"factory", "\xF0\x9F\x8F\xAD"}, {"file_folder", "\xF0\x9F\x93\x81"},
+    {"fire", "\xF0\x9F\x94\xA5"}, {"flashlight", "\xF0\x9F\x94\xA6"},
+    {"floppy_disk", "\xF0\x9F\x92\xBE"},
+    {"four_leaf_clover", "\xF0\x9F\x8D\x80"},
+    {"fox_face", "\xF0\x9F\xA6\x8A"}, {"game_die", "\xF0\x9F\x8E\xB2"},
+    {"gear", "\xE2\x9A\x99\xEF\xB8\x8F"}, {"gem", "\xF0\x9F\x92\x8E"},
+    {"ghost", "\xF0\x9F\x91\xBB"}, {"gift", "\xF0\x9F\x8E\x81"},
+    {"globe_with_meridians", "\xF0\x9F\x8C\x90"},
+    {"green_circle", "\xF0\x9F\x9F\xA2"}, {"grin", "\xF0\x9F\x98\x81"},
+    {"guitar", "\xF0\x9F\x8E\xB8"}, {"hammer", "\xF0\x9F\x94\xA8"},
+    {"handshake", "\xF0\x9F\xA4\x9D"},
+    {"heart", "\xE2\x9D\xA4\xEF\xB8\x8F"},
+    {"heart_eyes", "\xF0\x9F\x98\x8D"},
+    {"heavy_check_mark", "\xE2\x9C\x94\xEF\xB8\x8F"},
+    {"heavy_minus_sign", "\xE2\x9E\x96"},
+    {"heavy_plus_sign", "\xE2\x9E\x95"},
+    {"hospital", "\xF0\x9F\x8F\xA5"}, {"hourglass", "\xE2\x8C\x9B"},
+    {"hourglass_flowing_sand", "\xE2\x8F\xB3"},
+    {"house", "\xF0\x9F\x8F\xA0"}, {"inbox_tray", "\xF0\x9F\x93\xA5"},
+    {"information_source", "\xE2\x84\xB9\xEF\xB8\x8F"},
+    {"iphone", "\xF0\x9F\x93\xB1"}, {"jack_o_lantern", "\xF0\x9F\x8E\x83"},
+    {"joy", "\xF0\x9F\x98\x82"}, {"key", "\xF0\x9F\x94\x91"},
+    {"keyboard", "\xE2\x8C\xA8\xEF\xB8\x8F"},
+    {"label", "\xF0\x9F\x8F\xB7\xEF\xB8\x8F"},
+    {"leaves", "\xF0\x9F\x8D\x83"}, {"link", "\xF0\x9F\x94\x97"},
+    {"lock", "\xF0\x9F\x94\x92"}, {"loud_sound", "\xF0\x9F\x94\x8A"},
+    {"loudspeaker", "\xF0\x9F\x93\xA2"}, {"mag", "\xF0\x9F\x94\x8D"},
+    {"mega", "\xF0\x9F\x93\xA3"}, {"memo", "\xF0\x9F\x93\x9D"},
+    {"microphone", "\xF0\x9F\x8E\xA4"}, {"microscope", "\xF0\x9F\x94\xAC"},
+    {"moneybag", "\xF0\x9F\x92\xB0"}, {"movie_camera", "\xF0\x9F\x8E\xA5"},
+    {"muscle", "\xF0\x9F\x92\xAA"}, {"musical_note", "\xF0\x9F\x8E\xB5"},
+    {"mute", "\xF0\x9F\x94\x87"}, {"neutral_face", "\xF0\x9F\x98\x90"},
+    {"new", "\xF0\x9F\x86\x95"}, {"newspaper", "\xF0\x9F\x93\xB0"},
+    {"no_entry", "\xE2\x9B\x94"}, {"ok", "\xF0\x9F\x86\x97"},
+    {"ok_hand", "\xF0\x9F\x91\x8C"},
+    {"open_file_folder", "\xF0\x9F\x93\x82"},
+    {"outbox_tray", "\xF0\x9F\x93\xA4"}, {"owl", "\xF0\x9F\xA6\x89"},
+    {"package", "\xF0\x9F\x93\xA6"},
+    {"page_facing_up", "\xF0\x9F\x93\x84"},
+    {"panda_face", "\xF0\x9F\x90\xBC"}, {"paperclip", "\xF0\x9F\x93\x8E"},
+    {"pencil2", "\xE2\x9C\x8F\xEF\xB8\x8F"},
+    {"penguin", "\xF0\x9F\x90\xA7"}, {"pill", "\xF0\x9F\x92\x8A"},
+    {"pizza", "\xF0\x9F\x8D\x95"}, {"point_left", "\xF0\x9F\x91\x88"},
+    {"point_right", "\xF0\x9F\x91\x89"}, {"poop", "\xF0\x9F\x92\xA9"},
+    {"popcorn", "\xF0\x9F\x8D\xBF"}, {"pray", "\xF0\x9F\x99\x8F"},
+    {"pushpin", "\xF0\x9F\x93\x8C"}, {"puzzle_piece", "\xF0\x9F\xA7\xA9"},
+    {"question", "\xE2\x9D\x93"}, {"rabbit", "\xF0\x9F\x90\xB0"},
+    {"rainbow", "\xF0\x9F\x8C\x88"}, {"raised_hands", "\xF0\x9F\x99\x8C"},
+    {"recycle", "\xE2\x99\xBB\xEF\xB8\x8F"},
+    {"red_circle", "\xF0\x9F\x94\xB4"}, {"robot", "\xF0\x9F\xA4\x96"},
+    {"rocket", "\xF0\x9F\x9A\x80"}, {"roll_eyes", "\xF0\x9F\x99\x84"},
+    {"rose", "\xF0\x9F\x8C\xB9"},
+    {"rotating_light", "\xF0\x9F\x9A\xA8"},
+    {"round_pushpin", "\xF0\x9F\x93\x8D"}, {"runner", "\xF0\x9F\x8F\x83"},
+    {"satellite", "\xF0\x9F\x9B\xB0\xEF\xB8\x8F"},
+    {"school", "\xF0\x9F\x8F\xAB"}, {"scissors", "\xE2\x9C\x82\xEF\xB8\x8F"},
+    {"scream", "\xF0\x9F\x98\xB1"}, {"seedling", "\xF0\x9F\x8C\xB1"},
+    {"shield", "\xF0\x9F\x9B\xA1\xEF\xB8\x8F"}, {"ship", "\xF0\x9F\x9A\xA2"},
+    {"shrug", "\xF0\x9F\xA4\xB7"}, {"skull", "\xF0\x9F\x92\x80"},
+    {"sleeping", "\xF0\x9F\x98\xB4"}, {"smile", "\xF0\x9F\x98\x84"},
+    {"smirk", "\xF0\x9F\x98\x8F"}, {"snail", "\xF0\x9F\x90\x8C"},
+    {"snowflake", "\xE2\x9D\x84\xEF\xB8\x8F"}, {"sob", "\xF0\x9F\x98\xAD"},
+    {"sos", "\xF0\x9F\x86\x98"}, {"sparkles", "\xE2\x9C\xA8"},
+    {"speech_balloon", "\xF0\x9F\x92\xAC"}, {"star", "\xE2\xAD\x90"},
+    {"star2", "\xF0\x9F\x8C\x9F"}, {"stopwatch", "\xE2\x8F\xB1\xEF\xB8\x8F"},
+    {"sunglasses", "\xF0\x9F\x98\x8E"},
+    {"sunny", "\xE2\x98\x80\xEF\xB8\x8F"},
+    {"sweat_smile", "\xF0\x9F\x98\x85"}, {"tada", "\xF0\x9F\x8E\x89"},
+    {"telephone", "\xE2\x98\x8E\xEF\xB8\x8F"},
+    {"telescope", "\xF0\x9F\x94\xAD"}, {"thinking", "\xF0\x9F\xA4\x94"},
+    {"thought_balloon", "\xF0\x9F\x92\xAD"},
+    {"thumbsdown", "\xF0\x9F\x91\x8E"}, {"thumbsup", "\xF0\x9F\x91\x8D"},
+    {"top", "\xF0\x9F\x94\x9D"}, {"trophy", "\xF0\x9F\x8F\x86"},
+    {"tulip", "\xF0\x9F\x8C\xB7"}, {"turtle", "\xF0\x9F\x90\xA2"},
+    {"umbrella", "\xE2\x98\x94"}, {"unicorn", "\xF0\x9F\xA6\x84"},
+    {"video_camera", "\xF0\x9F\x93\xB9"},
+    {"video_game", "\xF0\x9F\x8E\xAE"},
+    {"warning", "\xE2\x9A\xA0\xEF\xB8\x8F"},
+    {"wastebasket", "\xF0\x9F\x97\x91\xEF\xB8\x8F"},
+    {"wave", "\xF0\x9F\x91\x8B"}, {"whale", "\xF0\x9F\x90\xB3"},
+    {"white_check_mark", "\xE2\x9C\x85"},
+    {"white_circle", "\xE2\x9A\xAA"}, {"wink", "\xF0\x9F\x98\x89"},
+    {"world_map", "\xF0\x9F\x97\xBA\xEF\xB8\x8F"},
+    {"wrench", "\xF0\x9F\x94\xA7"}, {"x", "\xE2\x9D\x8C"},
+    {"yellow_circle", "\xF0\x9F\x9F\xA1"}, {"zap", "\xE2\x9A\xA1"},
+    {"zzz", "\xF0\x9F\x92\xA4"},
+};
+
+static const char* emojiFor(const std::string& name) {
+    for (const auto& entry : kEmoji) {
+        if (name == entry.name) return entry.utf8;
+    }
+    return nullptr;
+}
+
+static bool isEmojiNameChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+           c == '+' || c == '-';
+}
+
+// Replaces :shortcode: with its emoji, in place, in every Text node
+// outside code
+static void splitEmojiShortcodes(const ElementPtr& parent) {
+    if (parent->type == ElementType::Code ||
+        parent->type == ElementType::CodeBlock ||
+        parent->type == ElementType::MermaidDiagram) {
+        return;
+    }
+    for (auto& child : parent->children) {
+        if (child->type != ElementType::Text) {
+            splitEmojiShortcodes(child);
+            continue;
+        }
+        std::string& text = child->text;
+        size_t pos = 0;
+        while ((pos = text.find(':', pos)) != std::string::npos) {
+            size_t end = pos + 1;
+            while (end < text.size() && isEmojiNameChar(text[end]) &&
+                   end - pos <= 40) {
+                end++;
+            }
+            if (end >= text.size() || text[end] != ':' || end == pos + 1) {
+                pos = end;
+                continue;
+            }
+            const char* emoji =
+                emojiFor(text.substr(pos + 1, end - pos - 1));
+            if (emoji) {
+                text.replace(pos, end - pos + 1, emoji);
+                pos += strlen(emoji);
+            } else {
+                // The closing colon may open the next shortcode
+                pos = end;
+            }
+        }
+    }
+}
+
+static void splitFileRefs(const ElementPtr& parent) {
+    if (parent->type == ElementType::Code ||
+        parent->type == ElementType::CodeBlock ||
+        parent->type == ElementType::MermaidDiagram ||
+        parent->type == ElementType::Link) {
+        return;
+    }
+
+    std::vector<ElementPtr> rebuilt;
+    bool changed = false;
+    for (auto& child : parent->children) {
+        if (child->type != ElementType::Text) {
+            splitFileRefs(child);
+            rebuilt.push_back(child);
+            continue;
+        }
+
+        const std::string& text = child->text;
+        size_t cursor = 0;
+        bool any = false;
+        size_t scan = 0;
+        while (scan < text.size()) {
+            size_t dot = text.find('.', scan);
+            if (dot == std::string::npos) break;
+            size_t extLength = 0;
+            for (const char* extension : kFileRefExtensions) {
+                size_t length = strlen(extension);
+                if (dot + length <= text.size() &&
+                    _strnicmp(text.c_str() + dot, extension, length) == 0 &&
+                    fileRefBoundary(text, dot + length)) {
+                    extLength = length;
+                    break;
+                }
+            }
+            if (extLength == 0) {
+                scan = dot + 1;
+                continue;
+            }
+            size_t end = dot + extLength;
+            size_t start = dot;
+            while (start > 0 && isFileRefChar(text[start - 1])) start--;
+            // ':' and '-' cannot open a path
+            while (start < dot &&
+                   (text[start] == ':' || text[start] == '-')) {
+                start++;
+            }
+            std::string token = text.substr(start, end - start);
+            if (start < cursor || !isFileRefToken(token, extLength)) {
+                scan = end;
+                continue;
+            }
+            any = true;
+            if (start > cursor) {
+                rebuilt.push_back(makeTextElement(
+                    text.substr(cursor, start - cursor), parent.get()));
+            }
+            auto link = std::make_shared<Element>(ElementType::Link);
+            link->parent = parent.get();
+            link->url = "fileref:" + token;
+            link->children.push_back(makeTextElement(token, link.get()));
+            rebuilt.push_back(std::move(link));
+            cursor = end;
+            scan = end;
+        }
+        if (!any) {
+            rebuilt.push_back(child);
+            continue;
+        }
+        changed = true;
+        if (cursor < text.size()) {
+            rebuilt.push_back(
+                makeTextElement(text.substr(cursor), parent.get()));
+        }
+    }
+    if (changed) parent->children = std::move(rebuilt);
+}
+
+} // namespace
+
+MarkdownParser::MarkdownParser() = default;
+MarkdownParser::~MarkdownParser() = default;
+
+static ParseResult parseCore(const std::string& markdown, FootnoteData* notes) {
+    ParseResult result;
+
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    ParserContext ctx;
+    ctx.inputStart = markdown.c_str();
+    ctx.inputLength = markdown.size();
+    ctx.notes = notes;
+
+    MD_PARSER parser = {
+        0, // abi_version
+        static_cast<unsigned>(
+            MD_FLAG_TABLES |
+            // Strikethrough is handled in the extension post-pass: md4c's
+            // implementation also consumes single ~tilde~ pairs, which we
+            // need for ~subscript~
+            MD_FLAG_PERMISSIVEAUTOLINKS |
+            MD_FLAG_PERMISSIVEURLAUTOLINKS |
+            MD_FLAG_TASKLISTS |
+            // Real-world notes (especially AI-chat exports) indent list
+            // continuations far enough that CommonMark turns them into code
+            // blocks — literal ** markers, no wrapping (#24). Fenced ```
+            // blocks are unaffected and remain the way to write code.
+            MD_FLAG_NOINDENTEDCODEBLOCKS |
+            MD_FLAG_LATEXMATHSPANS
+        ),
+        enterBlockCallback,
+        leaveBlockCallback,
+        enterSpanCallback,
+        leaveSpanCallback,
+        textCallback,
+        nullptr, // debug_log
+        nullptr  // syntax
+    };
+
+    int ret = md_parse(markdown.c_str(), static_cast<MD_SIZE>(markdown.size()), &parser, &ctx);
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    result.parseTimeUs = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count();
+
+    if (ret != 0) {
+        result.success = false;
+        result.error = "Failed to parse markdown";
+        return result;
+    }
+
+    ctx.flushText();
+    splitInlineExtensions(ctx.root);
+    splitWikiLinks(ctx.root);
+    splitFileRefs(ctx.root);
+    splitEmojiShortcodes(ctx.root);
+    detectGitHubAlerts(ctx.root);
+    result.root = ctx.root;
+    result.success = true;
+    return result;
+}
+
+ParseResult MarkdownParser::parse(const std::string& markdown) {
+    auto notes = extractFootnotes(markdown);
+    auto result = parseCore(notes.source, &notes);
+    if (result.success) appendFootnotes(result.root, notes, [&](const std::string& body) {
+        return parseCore(body, nullptr); // Nested footnote references stay literal.
+    });
+    return result;
+}
+
+ParseResult MarkdownParser::parseFile(const std::string& path) {
+    ParseResult result;
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        result.success = false;
+        result.error = "Failed to open file: " + path;
+        return result;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+
+    return parse(buffer.str());
+}
+
+// Utility functions
+std::string elementTypeToString(ElementType type) {
+    switch (type) {
+        case ElementType::Document: return "Document";
+        case ElementType::Paragraph: return "Paragraph";
+        case ElementType::Heading: return "Heading";
+        case ElementType::CodeBlock: return "CodeBlock";
+        case ElementType::MermaidDiagram: return "MermaidDiagram";
+        case ElementType::Highlight: return "Highlight";
+        case ElementType::Strikethrough: return "Strikethrough";
+        case ElementType::Underline: return "Underline";
+        case ElementType::Superscript: return "Superscript";
+        case ElementType::Subscript: return "Subscript";
+        case ElementType::BlockQuote: return "BlockQuote";
+        case ElementType::List: return "List";
+        case ElementType::ListItem: return "ListItem";
+        case ElementType::HorizontalRule: return "HorizontalRule";
+        case ElementType::Table: return "Table";
+        case ElementType::TableRow: return "TableRow";
+        case ElementType::TableCell: return "TableCell";
+        case ElementType::HtmlBlock: return "HtmlBlock";
+        case ElementType::Text: return "Text";
+        case ElementType::Code: return "Code";
+        case ElementType::Emphasis: return "Emphasis";
+        case ElementType::Strong: return "Strong";
+        case ElementType::Link: return "Link";
+        case ElementType::Image: return "Image";
+        case ElementType::SoftBreak: return "SoftBreak";
+        case ElementType::HardBreak: return "HardBreak";
+        case ElementType::Ruby: return "Ruby";
+        case ElementType::RubyText: return "RubyText";
+        case ElementType::Anchor: return "Anchor";
+        default: return "Unknown";
+    }
+}
+
+void debugPrintElement(const ElementPtr& elem, int indent) {
+    if (!elem) return;
+
+    std::string pad(indent * 2, ' ');
+    printf("%s%s", pad.c_str(), elementTypeToString(elem->type).c_str());
+
+    if (!elem->text.empty()) {
+        printf(": \"%s\"", elem->text.c_str());
+    }
+    if (elem->level > 0) {
+        printf(" (level=%d)", elem->level);
+    }
+    if (!elem->url.empty()) {
+        printf(" [url=%s]", elem->url.c_str());
+    }
+    printf("\n");
+
+    for (const auto& child : elem->children) {
+        debugPrintElement(child, indent + 1);
+    }
+}
+
+// Simple HTML tag parser
+struct HtmlTag {
+    std::string name;
+    bool isClosing = false;
+    bool isSelfClosing = false;
+    std::string href;
+    std::string title;
+    std::string id;
+};
+
+static std::string toLower(const std::string& s) {
+    std::string result = s;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return result;
+}
+
+static std::string trim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+
+static std::string extractAttribute(const std::string& tag, const std::string& attr) {
+    // Cache compiled regexes - regex compilation is very expensive
+    static std::unordered_map<std::string, std::regex> regexCache;
+    auto it = regexCache.find(attr);
+    if (it == regexCache.end()) {
+        std::string pattern = attr + "\\s*=\\s*[\"']([^\"']*)[\"']";
+        it = regexCache.emplace(attr, std::regex(pattern, std::regex::icase)).first;
+    }
+    std::smatch match;
+    if (std::regex_search(tag, match, it->second) && match.size() > 1) {
+        return match[1].str();
+    }
+    return "";
+}
+
+static HtmlTag parseTag(const std::string& tagStr) {
+    HtmlTag tag;
+
+    // Check if closing tag
+    size_t start = 1;
+    if (tagStr.length() > 1 && tagStr[1] == '/') {
+        tag.isClosing = true;
+        start = 2;
+    }
+
+    // Extract tag name
+    size_t end = tagStr.find_first_of(" \t\n\r/>", start);
+    if (end == std::string::npos) end = tagStr.length() - 1;
+    tag.name = toLower(tagStr.substr(start, end - start));
+
+    // Check for self-closing
+    if (tagStr.find("/>") != std::string::npos) {
+        tag.isSelfClosing = true;
+    }
+
+    // Extract common attributes
+    tag.href = extractAttribute(tagStr, "href");
+    tag.title = extractAttribute(tagStr, "title");
+    tag.id = extractAttribute(tagStr, "id");
+
+    return tag;
+}
+
+// Elements that start on their own line inside an HTML block; text after
+// one of them starts fresh, with no space carried over
+static bool isHtmlBlockLevel(ElementType type) {
+    switch (type) {
+        case ElementType::Paragraph: case ElementType::Heading: case ElementType::List:
+        case ElementType::ListItem: case ElementType::CodeBlock: case ElementType::BlockQuote:
+        case ElementType::HorizontalRule: case ElementType::HardBreak:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Whether an element draws any text: an empty anchor, or a link around an
+// image the block ignores, only takes a place
+static bool hasDrawnText(const Element* elem) {
+    if (elem->type == ElementType::Text) return !elem->text.empty();
+    for (const auto& child : elem->children) {
+        if (hasDrawnText(child.get())) return true;
+    }
+    return false;
+}
+
+// Whether an element's drawn text ends in a space
+static bool endsInSpace(const Element* elem) {
+    if (elem->type == ElementType::Text) {
+        return !elem->text.empty() && isspace((unsigned char)elem->text.back());
+    }
+    for (auto it = elem->children.rbegin(); it != elem->children.rend(); ++it) {
+        if (!hasDrawnText(it->get())) continue;
+        return endsInSpace(it->get());
+    }
+    return false;
+}
+
+// What text added at the end of `container` follows on its line: whether
+// that is inline content and whether it already ends in a space. An empty
+// inline element continues the line of the content before it.
+static void precedingInline(const Element* container, const Element* root,
+                            bool& afterInline, bool& afterSpace) {
+    afterInline = afterSpace = false;
+    const Element* child = nullptr;  // look before this child; null: at the end
+    for (const Element* e = container; e; child = e, e = e->parent) {
+        auto end = e->children.end();
+        if (child) {
+            end = std::find_if(e->children.begin(), e->children.end(),
+                               [&](const ElementPtr& c) { return c.get() == child; });
+        }
+        for (auto it = std::make_reverse_iterator(end); it != e->children.rend(); ++it) {
+            // Inline content without text (an empty anchor, a linked
+            // image) only takes a place
+            if (!isHtmlBlockLevel((*it)->type) && !hasDrawnText(it->get())) continue;
+            afterInline = !isHtmlBlockLevel((*it)->type);
+            afterSpace = endsInSpace(it->get());
+            return;
+        }
+        if (e == root || isHtmlBlockLevel(e->type)) return;
+    }
+}
+
+// Drops the trailing space of an element's last drawn text
+static void trimTrailingSpace(Element* elem) {
+    for (auto it = elem->children.rbegin(); it != elem->children.rend(); ++it) {
+        if (!hasDrawnText(it->get())) continue;
+        if ((*it)->type != ElementType::Text) {
+            trimTrailingSpace(it->get());
+            return;
+        }
+        std::string& text = (*it)->text;
+        while (!text.empty() && isspace((unsigned char)text.back())) text.pop_back();
+        if (text.empty()) elem->children.erase(std::next(it).base());
+        return;
+    }
+}
+
+// A wrapper left with nothing in it (<sub> alone on its line, ahead of the
+// Markdown it was meant to wrap) would only draw an empty line
+static void pruneEmptyWrappers(Element* elem) {
+    for (const auto& child : elem->children) pruneEmptyWrappers(child.get());
+    auto empty = [](const ElementPtr& child) {
+        switch (child->type) {
+            case ElementType::Strong: case ElementType::Emphasis: case ElementType::Subscript:
+            case ElementType::Superscript: case ElementType::Underline:
+            case ElementType::Strikethrough: case ElementType::Highlight:
+                return child->children.empty();
+            default:
+                return false;
+        }
+    };
+    elem->children.erase(std::remove_if(elem->children.begin(), elem->children.end(), empty),
+                         elem->children.end());
+}
+
+void parseHtmlIntoElements(const std::string& html, Element* parent) {
+    if (!parent) return;
+
+    std::stack<Element*> elementStack;
+    elementStack.push(parent);
+
+    size_t pos = 0;
+    std::string textBuffer;
+
+    // Text between tags. Block tags trim it; beside an inline tag (<b>,
+    // <sub>, <a>...) a space stays one space, as in a browser, where
+    // trimming glued "a <ins>b</ins> c" into "abc" (#263)
+    auto flushText = [&](bool inlineTag = false) {
+        if (textBuffer.empty() || elementStack.empty()) {
+            textBuffer.clear();
+            return;
+        }
+        Element* top = elementStack.top();
+        // What the text follows on its line: inline content (a space before
+        // the text stays) that may already end in a space (it is not doubled)
+        bool afterInline = false, afterSpace = false;
+        precedingInline(top, parent, afterInline, afterSpace);
+        bool lead = isspace((unsigned char)textBuffer.front()) != 0;
+        bool tail = isspace((unsigned char)textBuffer.back()) != 0;
+        std::string text = trim(textBuffer);
+        textBuffer.clear();
+        if (text.empty()) {
+            if (!(inlineTag && afterInline) || afterSpace) return;
+            text = " ";  // the space between two inline elements
+        } else {
+            if (lead && afterInline && !afterSpace) text.insert(0, 1, ' ');
+            if (tail && inlineTag) text += ' ';
+        }
+        auto textElem = std::make_shared<Element>(ElementType::Text);
+        textElem->text = text;
+        textElem->parent = top;
+        top->children.push_back(textElem);
+    };
+
+    // A close tag closes the nearest open element of its kind and whatever
+    // was left open inside it. One with nothing to close is ignored rather
+    // than ending whichever element happens to be open.
+    auto closeElement = [&](ElementType type, bool inlineTag, ElementType alsoType) {
+        size_t depth = 0;
+        for (Element* e = elementStack.top(); e && e != parent; e = e->parent, depth++) {
+            if (e->type != type && e->type != alsoType) continue;
+            flushText(inlineTag);
+            for (size_t i = 0; i <= depth && elementStack.size() > 1; i++) elementStack.pop();
+            // A block ends without the space kept before an inline tag
+            // (<h2>Title <a><img></a></h2>), which would reach its slug
+            if (isHtmlBlockLevel(e->type)) trimTrailingSpace(e);
+            return;
+        }
+    };
+
+    while (pos < html.length()) {
+        // Look for next tag
+        size_t tagStart = html.find('<', pos);
+
+        if (tagStart == std::string::npos) {
+            // No more tags, add remaining text
+            textBuffer += html.substr(pos);
+            break;
+        }
+
+        // Add text before tag
+        if (tagStart > pos) {
+            textBuffer += html.substr(pos, tagStart - pos);
+        }
+
+        // Find end of tag
+        size_t tagEnd = html.find('>', tagStart);
+        if (tagEnd == std::string::npos) {
+            // Malformed, add as text
+            textBuffer += html.substr(tagStart);
+            break;
+        }
+
+        std::string tagStr = html.substr(tagStart, tagEnd - tagStart + 1);
+        HtmlTag tag = parseTag(tagStr);
+
+        // Handle different tags
+        if (tag.name == "ul" || tag.name == "ol") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::List);
+                elem->ordered = (tag.name == "ol");
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::List, false, ElementType::List);
+            }
+        }
+        else if (tag.name == "li") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::ListItem);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::ListItem, false, ElementType::ListItem);
+            }
+        }
+        else if (tag.name == "a") {
+            if (!tag.isClosing) {
+                flushText(true);
+                // Without an href, id= or name= only marks a link target (#255)
+                std::string anchorId;
+                if (tag.href.empty()) {
+                    anchorId = !tag.id.empty() ? tag.id : extractAttribute(tagStr, "name");
+                }
+                auto elem = std::make_shared<Element>(
+                    anchorId.empty() ? ElementType::Link : ElementType::Anchor);
+                if (anchorId.empty()) {
+                    elem->url = tag.href;
+                    elem->title = tag.title;
+                } else {
+                    elem->title = anchorId;
+                }
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                if (anchorId.empty() || !tag.isSelfClosing) elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Link, true, ElementType::Anchor);
+            }
+        }
+        else if (tag.name == "strong" || tag.name == "b") {
+            if (!tag.isClosing) {
+                flushText(true);
+                auto elem = std::make_shared<Element>(ElementType::Strong);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Strong, true, ElementType::Strong);
+            }
+        }
+        else if (tag.name == "em" || tag.name == "i") {
+            if (!tag.isClosing) {
+                flushText(true);
+                auto elem = std::make_shared<Element>(ElementType::Emphasis);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Emphasis, true, ElementType::Emphasis);
+            }
+        }
+        else if (tag.name == "code") {
+            if (!tag.isClosing) {
+                flushText(true);
+                auto elem = std::make_shared<Element>(ElementType::Code);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Code, true, ElementType::Code);
+            }
+        }
+        else if (tag.name == "sub" || tag.name == "sup" || tag.name == "ins" ||
+                 tag.name == "u" || tag.name == "del" || tag.name == "s" ||
+                 tag.name == "strike" || tag.name == "mark") {
+            // The inline spans of #263, as in a paragraph. Inside <pre> or
+            // <code> the tags go and their text stays, as before.
+            bool inCode = false;
+            for (Element* e = elementStack.top(); e && e != parent; e = e->parent) {
+                inCode = inCode || e->type == ElementType::CodeBlock || e->type == ElementType::Code;
+            }
+            ElementType type =
+                tag.name == "sub" ? ElementType::Subscript :
+                tag.name == "sup" ? ElementType::Superscript :
+                tag.name == "mark" ? ElementType::Highlight :
+                (tag.name == "ins" || tag.name == "u") ? ElementType::Underline :
+                ElementType::Strikethrough;
+            if (inCode) {
+                // the text runs on inside the code
+            } else if (!tag.isClosing && !tag.isSelfClosing) {
+                flushText(true);
+                auto elem = std::make_shared<Element>(type);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else if (tag.isClosing) {
+                closeElement(type, true, type);
+            }
+        }
+        else if (tag.name == "p") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::Paragraph);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Paragraph, false, ElementType::Paragraph);
+            }
+        }
+        else if (tag.name == "h1" || tag.name == "h2" || tag.name == "h3" ||
+                 tag.name == "h4" || tag.name == "h5" || tag.name == "h6") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::Heading);
+                elem->level = tag.name[1] - '0';
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Heading, false, ElementType::Heading);
+            }
+        }
+        else if (tag.name == "br") {
+            flushText();
+            auto elem = std::make_shared<Element>(ElementType::HardBreak);
+            elem->parent = elementStack.top();
+            elementStack.top()->children.push_back(elem);
+        }
+        else if (tag.name == "hr") {
+            flushText();
+            auto elem = std::make_shared<Element>(ElementType::HorizontalRule);
+            elem->parent = elementStack.top();
+            elementStack.top()->children.push_back(elem);
+        }
+        else if (tag.name == "pre") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::CodeBlock);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::CodeBlock, false, ElementType::CodeBlock);
+            }
+        }
+        else if (tag.name == "blockquote") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::BlockQuote);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::BlockQuote, false, ElementType::BlockQuote);
+            }
+        }
+        else if (tag.name == "ruby") {
+            if (!tag.isClosing) {
+                flushText(true);
+                auto elem = std::make_shared<Element>(ElementType::Ruby);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::Ruby, true, ElementType::Ruby);
+            }
+        }
+        else if (tag.name == "rt") {
+            if (!tag.isClosing) {
+                flushText();
+                auto elem = std::make_shared<Element>(ElementType::RubyText);
+                elem->parent = elementStack.top();
+                elementStack.top()->children.push_back(elem);
+                elementStack.push(elem.get());
+            } else {
+                closeElement(ElementType::RubyText, false, ElementType::RubyText);
+            }
+        }
+        else if (tag.name == "rp") {
+            // Discard <rp> content (fallback parens for non-ruby renderers)
+            if (!tag.isClosing) {
+                flushText(); // Flush any preceding text before discarding
+            } else {
+                textBuffer.clear(); // Discard rp content (e.g. parentheses)
+            }
+        }
+        // Ignore div, span, and other container tags but process their content
+        else if (tag.name == "div" || tag.name == "span") {
+            // Just continue processing content
+        }
+        // Skip comments
+        else if (tagStr.substr(0, 4) == "<!--") {
+            size_t commentEnd = html.find("-->", tagStart);
+            if (commentEnd != std::string::npos) {
+                tagEnd = commentEnd + 2;
+            }
+        }
+
+        pos = tagEnd + 1;
+    }
+
+    flushText();
+    // Blocks left open (an <h2> whose </h2> never came) end here, the same way
+    while (elementStack.size() > 1) {
+        if (isHtmlBlockLevel(elementStack.top()->type)) trimTrailingSpace(elementStack.top());
+        elementStack.pop();
+    }
+    pruneEmptyWrappers(parent);
+}
+
+} // namespace qmd

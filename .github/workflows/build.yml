@@ -1,0 +1,147 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Re-run just the Store submission for an existing release (e.g. after
+  # a Partner Center or tooling failure)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to submit to the Store (e.g. v2.8.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Get version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Tinta v${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Tinta v${{ steps.version.outputs.VERSION }}
+
+            ### Installation
+            - Easiest: `winget install "Tinta Markdown Viewer" -s msstore` (Store-signed, no security prompts, auto-updates), or the [Microsoft Store page](https://apps.microsoft.com/detail/9MZ5MZ3L9RKF)
+            - Portable: download `tinta.exe` below and run it (SmartScreen may ask: "More info", then "Run anyway")
+            - Optionally run `tinta.exe /register` to register Markdown, Mermaid and PlantUML files
+
+            ### PlantUML diagrams (#248)
+            - `plantuml` fences and standalone `.puml` / `.plantuml` files render through a PlantUML you already have: a `plantuml.exe`, or a `plantuml.jar` run with Java. Choose it in Settings → Editor → PlantUML diagrams (#248)
+            - Diagrams follow your theme in the preview, print and the HTML and Word exports. PlantUML always runs in its sandbox, so a diagram cannot read your files or reach the network (#248)
+            - Contributed by @ArcSalazar (#248)
+
+            ### HTML sub, sup and underline (#263)
+            - `<sub>`, `<sup>` and `<ins>`, plus `<u>`, `<del>`, `<s>` and `<mark>`, render in paragraphs, headings, lists, tables, quotes and HTML blocks, and stay in the HTML and Word exports (#263)
+            - `~~` and `==` work across them, so `~~H<sub>2</sub>O~~` is struck through, as on GitHub (#263)
+            - Suggested by @Ragos81 (#263)
+
+            ### Theme fonts (#256)
+            - The theme editor chooses the text, heading and code fonts with a Text / Headings / Code switch above its font list (#256)
+            - Word export sets Chinese text in the theme's font in Chinese Word too, and `themes.ini` always lists `headingfont=` (#256)
+            - Reported by @go4399 (#256)
+
+            ### Fixed
+            - Inline code sits on the baseline of the text beside it with any body and code font, including Chinese text. Reported by @go4399 and @tigerhawkvok (#259, #262)
+            - Bold and italic words in a heading keep the heading's size, and superscripts and subscripts in a heading scale with it (#259, #263)
+            - With word wrap on, stepping through the editor's search matches keeps the current match on screen. Reported by @derek-price (#260)
+            - HTML blocks keep the space beside inline tags such as `<b>` and `<a>` instead of joining the words (#263)
+
+            ### What's included
+            - Export as HTML, DOCX, or PDF, plus optional Pandoc formats
+            - 22 natively rendered Mermaid diagram families, and PlantUML diagrams through a local PlantUML
+            - Tabbed interface with drag, session restore, and a tab context menu
+            - 10 tuned themes (5 light, 5 dark) plus custom themes
+            - Hardware-accelerated rendering via Direct2D
+            - Single portable executable about 2.5 MB, no dependencies
+          files: build/Release/tinta.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publishes the release to the Microsoft Store (app 9MZ5MZ3L9RKF).
+  # Skips itself until the MSSTORE_* secrets are configured — see packaging/msix/README notes.
+  store:
+    runs-on: windows-latest
+    needs: build
+    # Runs after a successful tag build, or standalone via workflow_dispatch
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.build.result == 'success')
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+      MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+      MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+      MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+
+    steps:
+      - name: Check Store credentials
+        id: gate
+        shell: bash
+        run: |
+          if [ -n "$MSSTORE_CLIENT_SECRET" ]; then
+            echo "on=true" >> $GITHUB_OUTPUT
+          else
+            echo "on=false" >> $GITHUB_OUTPUT
+            echo "MSSTORE_* secrets not set - skipping Store publish."
+          fi
+
+      - name: Checkout code
+        if: steps.gate.outputs.on == 'true'
+        uses: actions/checkout@v4
+
+      - name: Download release asset
+        if: steps.gate.outputs.on == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build\Release | Out-Null
+          gh release download $env:RELEASE_TAG --pattern tinta.exe --output build\Release\tinta.exe --repo $env:GITHUB_REPOSITORY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pack MSIX
+        if: steps.gate.outputs.on == 'true'
+        shell: pwsh
+        run: pwsh -File packaging/msix/pack.ps1 -ExePath build/Release/tinta.exe
+
+      - name: Setup Microsoft Store CLI
+        if: steps.gate.outputs.on == 'true'
+        uses: microsoft/setup-msstore-cli@v1
+        with:
+          # v0.4.0 (2026-08-18, .NET 10/native-AOT rework) fails uploads at
+          # 34% consistently; pin the last known-good release
+          version: "v0.3.9"
+
+      - name: Configure Store CLI
+        if: steps.gate.outputs.on == 'true'
+        shell: pwsh
+        run: msstore reconfigure --tenantId $env:MSSTORE_TENANT_ID --sellerId $env:MSSTORE_SELLER_ID --clientId $env:MSSTORE_CLIENT_ID --clientSecret $env:MSSTORE_CLIENT_SECRET
+
+      - name: Publish to Microsoft Store
+        if: steps.gate.outputs.on == 'true'
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem packaging/msix/out/tinta-*.msix | Select-Object -First 1
+          msstore publish $msix.FullName --appId 9MZ5MZ3L9RKF
