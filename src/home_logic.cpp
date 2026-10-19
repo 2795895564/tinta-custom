@@ -299,6 +299,15 @@ void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& sel
     else request(s, kHomeParent);
 }
 
+// Quiet rescan: keep the cursor, multi-selection and scroll row where they
+// are while a changed directory replaces the current listing.
+void homeRefreshDirectory(HomeState& s) {
+    if (s.dir.empty()) return;
+    if (const Entry* e = homeSelected(s)) s.restoreName = e->name;
+    request(s, kHomeCurrent);
+    if (!sameDir(s.dir, s.root)) request(s, kHomeParent);
+}
+
 void homeApplyListing(HomeState& s, int slot, uint32_t gen, Listing&& l) {
     if (slot < 0 || slot > 2 || gen != s.gen[slot]) return;  // stale
     if (slot == kHomeParent) {

@@ -1187,6 +1187,35 @@ static void updateCheckWorker(HWND hwnd) {
     }
 }
 
+// Persist the tab set every few seconds so a crash loses at most this window,
+// not the whole session. The exit path still does a final save.
+void persistSessionTabs(App& app) {
+    if (!app.sessionOwner) return;
+    Settings settings = loadSettings();
+    std::vector<std::string> paths;
+    int active = 0;
+    for (size_t i = 0; i < app.tabs.size(); i++) {
+        const std::string& path =
+            (int)i == app.activeTab ? app.currentFile : app.tabs[i].path;
+        if (path.empty()) continue;
+        if ((int)i == app.activeTab) active = (int)paths.size();
+        paths.push_back(path);
+    }
+    const bool activeUntitled =
+        app.activeTab >= 0 && app.activeTab < (int)app.tabs.size() &&
+        app.tabs[app.activeTab].path.empty() &&
+        !app.tabs[app.activeTab].home;
+    const bool homeActive = app.tabs.empty() || app.activeTab == 0 ||
+                            app.tabs[app.activeTab].home || activeUntitled;
+    if (settings.sessionTabs == paths && settings.sessionActive == active &&
+        settings.sessionHomeActive == homeActive)
+        return;
+    settings.sessionTabs = std::move(paths);
+    settings.sessionActive = active;
+    settings.sessionHomeActive = homeActive;
+    saveSettings(settings);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     App* app = g_app;
 
@@ -1649,6 +1678,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 app->cursorBlinkOn = !app->cursorBlinkOn;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            if (wParam == TIMER_SESSION_SAVE && app) persistSessionTabs(*app);
             if (wParam == TIMER_HOME_NOTICE && app) {
                 const bool expired =
                     !app->home.fileNotice.empty() &&
@@ -1824,6 +1854,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             KillTimer(hwnd, TIMER_CURSOR_BLINK);
             KillTimer(hwnd, TIMER_NOTIFICATION);
             KillTimer(hwnd, TIMER_HOME_NOTICE);
+            KillTimer(hwnd, TIMER_SESSION_SAVE);
             KillTimer(hwnd, TIMER_ZOOM_APPLY);
             KillTimer(hwnd, TIMER_DRAFT_SAVE);
             // Join the PlantUML worker and delete every unadopted work dir
@@ -1869,6 +1900,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (app->sessionOwner) {
                     settings.sessionTabs.clear();
                     settings.sessionActive = 0;
+                    const bool activeUntitled =
+                        app->activeTab >= 0 &&
+                        app->activeTab < (int)app->tabs.size() &&
+                        app->tabs[app->activeTab].path.empty() &&
+                        !app->tabs[app->activeTab].home;
+                    settings.sessionHomeActive =
+                        app->tabs.empty() || app->activeTab == 0 ||
+                        app->tabs[app->activeTab].home || activeUntitled;
                     for (size_t i = 0; i < app->tabs.size(); i++) {
                         const std::string& path =
                             (int)i == app->activeTab ? app->currentFile
@@ -2363,7 +2402,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
                                               : std::vector<std::string>{});
         // Home stays tab 0, but a restored session resumes the document tab
         // that was active instead of always dropping the user back on Home.
-        if (restoreSession && savedSettings.sessionActive > 0 &&
+        if (restoreSession && !savedSettings.sessionHomeActive &&
+            savedSettings.sessionActive >= 0 &&
             savedSettings.sessionActive < (int)sessionPaths.size()) {
             tabActivate(app, app.hwnd, 1 + savedSettings.sessionActive);
         }
@@ -2376,6 +2416,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // Start file watch timer and record initial write time
     updateFileWriteTime(app);
     SetTimer(app.hwnd, TIMER_FILE_WATCH, 500, nullptr);
+    SetTimer(app.hwnd, TIMER_SESSION_SAVE, 5000, nullptr);
 
     // Show window (respect saved maximized state)
     t0 = Clock::now();

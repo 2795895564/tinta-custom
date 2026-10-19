@@ -144,6 +144,8 @@ struct HomeState {
     std::wstring repoNotice;
     std::wstring fileNotice;  // transient success/info from file operations
     unsigned long long fileNoticeUntil = 0;  // GetTickCount64 deadline
+    std::wstring watchedDir;  // directory whose write time we last saw
+    unsigned long long watchedDirTime = 0;
     bool refreshRows = false;
     bool pendingBrowse = false;
     std::string pendingChoose, pendingRemove, pendingRelocate, pendingDefault;
@@ -187,6 +189,7 @@ struct HomeState {
 bool homeHasRoot(const HomeState& s);
 void homeSetRoot(HomeState& s, const std::wstring& root, const std::wstring& startDir);
 void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& select);
+void homeRefreshDirectory(HomeState& s);
 void homeApplyListing(HomeState& s, int slot, uint32_t gen, dirmodel::Listing&& listing);
 void homeApplyPreviewText(HomeState& s, uint32_t gen, const std::wstring& path,
                           std::wstring&& text);

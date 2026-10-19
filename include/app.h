@@ -52,6 +52,7 @@ inline int64_t usElapsed(Clock::time_point start) {
 #define TIMER_SIDE_PANEL_SCROLLBARS 12
 #define TIMER_TAB_HOVER_CARD 13
 #define TIMER_HOME_NOTICE 14
+#define TIMER_SESSION_SAVE 15
 
 // Posted to continue an incomplete document layout in time-budgeted chunks
 #define WM_APP_LAYOUT_CHUNK (WM_APP + 1)
@@ -224,6 +225,7 @@ struct Settings {
     // Last session's open tabs, restored on the next plain launch
     std::vector<std::string> sessionTabs;
     int sessionActive = 0;
+    bool sessionHomeActive = true;  // last active tab was Home
     // Reading positions: most-recent-first, capped (#77). zoom = 0 means
     // "no per-document zoom": the document keeps the current zoom.
     struct ReadingPosition { std::string path; float scrollY; float zoom = 0.0f; };

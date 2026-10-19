@@ -103,6 +103,8 @@ bool saveSettings(const Settings& settings) {
         // Open tabs from the last session, restored on the next plain launch
         file << "[Session]\n";
         file << "sessionActive=" << settings.sessionActive << "\n";
+        file << "sessionHomeActive=" << (settings.sessionHomeActive ? 1 : 0)
+             << "\n";
         for (const auto& tabPath : settings.sessionTabs) {
             file << "tab=" << tabPath << "\n";
         }
@@ -443,6 +445,8 @@ Settings loadSettings() {
         } else if (key == "sessionActive") {
             int idx = std::stoi(value);
             if (idx >= 0) settings.sessionActive = idx;
+        } else if (key == "sessionHomeActive") {
+            settings.sessionHomeActive = (value == "1");
         } else if (key == "tab") {
             if (!value.empty() && settings.sessionTabs.size() < 64) {
                 settings.sessionTabs.push_back(value);

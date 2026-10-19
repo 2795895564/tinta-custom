@@ -53,6 +53,8 @@
 | D24 | 列层级 | `[已验证]` | 活动列保持完整对比；左侧历史列的名称、徽标、文件夹箭头和元数据降到 0.58/0.72/0.62，视线先落在当前列 | `out/meta/01-columns.png` |
 | D25 | 全屏列宽 | `[已验证]` | 单列上限 1000 DIP，双列 520、三列 400；单列总宽 1000、双列总宽 1056，打开文件夹时列组几乎不变宽 | `out/full/04-width2-root.png`、`05-width2-two.png` |
 | D26 | 会话恢复活动标签 | `[已验证]` | Home 启动时保留 Home 为第 0 个标签，并把上次活动文件标签恢复为当前标签；上次停在 Home 则仍打开 Home | `out/session/01-restored.png`；探针 settings `[Session] tab=` |
+| D27 | Home 外部变化刷新 | `[已验证]` | Home 活动时每 500ms 检查目录写时间；新增/删除/改名后安静重扫，保留光标与多选；文档内容变化仍由现有文件监视处理 | `out/watch/01-before.png`、`02-after-add.png` |
+| D28 | 崩溃会话自动保存 | `[已验证]` | 每 5s 把当前标签集与活动标签写入 `[Session]`，包含 `sessionHomeActive`；强杀后重启可恢复标签 | `out/watch/03-active-b.png`、`04-restored.png` |
 
 ## C. 提案 / 待决定
 
@@ -107,6 +109,8 @@
 | V28 | 活动列优先 | `[已验证]` | 进入子目录后，左侧父列整体变淡，右侧活动列保持完整对比 | `out/meta/01-columns.png` |
 | V29 | 全屏布局 | `[已验证]` | 2560×1540 最大化：单列 1000 DIP、双列 520、三列 400；单列与双列总宽只差 56 DIP，入口不突兀 | `out/full/04-width2-root.png`、`05-width2-two.png` |
 | V30 | 会话恢复活动标签 | `[已验证]` | 预置 Home + a.md + b.md，sessionActive=1；启动后 b.md 为当前标签并显示 Bravo | `out/session/01-restored.png` |
+| V31 | Home 目录外部刷新 | `[已验证]` | Home 根目录从 2 项变 3 项（外部创建 c.md），光标仍在 a.md | `out/watch/01-before.png`、`02-after-add.png` |
+| V32 | 崩溃后恢复标签 | `[已验证]` | 打开 b.md，等待 >5s，强杀；settings 写入 `sessionHomeActive=0` + b.md；重启后 b.md 为活动标签 | `out/watch/03-active-b.png`、`04-restored.png` |
 
 ## F. 环境限制
 
@@ -145,3 +149,4 @@
 - 2026-10-20：列层级：左侧历史列的名称/徽标/箭头/元数据整体变淡，活动列保持完整对比，减少多列并排时的视觉噪音。
 - 2026-10-20：全屏列宽：单列上限 1000 DIP，双列 520、三列 400；单列总宽与双列总宽只差 56 DIP，减少“单列→双列”的突兀跳变。
 - 2026-10-20：会话恢复：Home 启动时把上次活动文件标签设为当前标签，不再总是回到 Home；上次活动是 Home 时保持 Home。
+- 2026-10-20：外部变化与崩溃恢复：Home 目录写时间变化触发安静重扫；标签会话每 5s 自动保存，并记录 `sessionHomeActive`，强杀后也能恢复活动标签。

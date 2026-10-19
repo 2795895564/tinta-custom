@@ -7,6 +7,7 @@ Settings:
 ```ini
 [Session]
 sessionActive=1
+sessionHomeActive=0
 tab=D:\...\repo\a.md
 tab=D:\...\repo\b.md
 
@@ -29,12 +30,31 @@ Screenshot: `out/session/01-restored.png`.
 
 ## Active Home
 
-Set `sessionActive=0` with the same tabs. Launch.
+Set `sessionActive=0` and `sessionHomeActive=1` with the same tabs. Launch.
 
 Expected:
 
 - `Home` is the active tab
 - `a.md` and `b.md` remain as background tabs
+
+## Crash recovery
+
+1. Launch with `openInTabs=1`.
+2. Open `b.md` so it becomes the active tab.
+3. Wait at least five seconds (the session timer is 5s).
+4. Kill the process instead of closing the window.
+5. `settings.ini` contains:
+
+   ```ini
+   [Session]
+   sessionActive=0
+   sessionHomeActive=0
+   tab=D:\...\repo\b.md
+   ```
+
+6. Relaunch: `b.md` is the active tab and shows `Bravo`.
+
+Screenshots: `out/watch/03-active-b.png`, `04-restored.png`.
 
 ## Missing files
 

@@ -4529,6 +4529,30 @@ void handleLinkPeekTimer(App& app, HWND hwnd) {
 }
 
 void handleFileWatchTimer(App& app, HWND hwnd) {
+    // A directory's write time changes when entries are added, removed or
+    // renamed. Rescan the active Home directory quietly so an external file
+    // operation shows up without changing the cursor or multi-selection.
+    if (homeActive(app) && app.home.screen == HomeScreen::Home &&
+        app.home.dialog == HomeDialogKind::None && !app.home.dir.empty()) {
+        WIN32_FILE_ATTRIBUTE_DATA fad{};
+        if (GetFileAttributesExW(app.home.dir.c_str(), GetFileExInfoStandard,
+                                 &fad)) {
+            ULARGE_INTEGER stamp;
+            stamp.LowPart = fad.ftLastWriteTime.dwLowDateTime;
+            stamp.HighPart = fad.ftLastWriteTime.dwHighDateTime;
+            HomeState& H = app.home;
+            if (H.watchedDir != H.dir) {
+                H.watchedDir = H.dir;
+                H.watchedDirTime = stamp.QuadPart;
+            } else if (H.watchedDirTime != stamp.QuadPart) {
+                H.watchedDirTime = stamp.QuadPart;
+                homeRefreshDirectory(H);
+                homeRefresh(app, hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+    }
+
     // Refresh the deleted-on-disk flags driving the red-grey tab dots
     // (runs even when the active document is untitled or being edited)
     bool missingChanged = false;
