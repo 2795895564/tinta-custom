@@ -1750,16 +1750,22 @@ void renderHome(App& app) {
             const float badgeX = x + pad;
             const float badgeY = y + (rowH - badgeH) / 2.0f;
             if (e.kind == Kind::Folder) {
+                D2D1_COLOR_F chevron = rowStrong ? th.text : th.accent;
+                if (!active) chevron = withAlpha(chevron, 0.58f);
                 text(app, fm.tag, L"\x25B8", badgeX, y, badgeW, rowH,
-                     rowStrong ? th.text : th.accent);
+                     chevron);
             } else {
                 const bool doc = e.kind == Kind::Document;
-                const D2D1_COLOR_F tagBg =
+                D2D1_COLOR_F tagBg =
                     rowStrong ? (doc ? th.accent : withAlpha(th.text, 0.30f))
                               : withAlpha(doc ? th.accent : th.text, 0.10f);
-                const D2D1_COLOR_F tagFg =
+                D2D1_COLOR_F tagFg =
                     rowStrong ? th.background
                               : (doc ? th.accent : withAlpha(th.text, 0.55f));
+                if (!active) {
+                    tagBg.a *= 0.72f;
+                    tagFg.a *= 0.72f;
+                }
                 fillRound(app, badgeX, badgeY, badgeX + badgeW, badgeY + badgeH,
                           dpi(app, 3), tagBg);
                 text(app, fm.tag, fileTypeTag(e), badgeX, y, badgeW, rowH, tagFg);
@@ -1769,16 +1775,21 @@ void renderHome(App& app) {
                 inlineNameField(app, H, fm, x + pad + leadW, y + dpi(app, 2),
                                 nameW, rowH - dpi(app, 4), th);
             } else {
+                D2D1_COLOR_F nameC =
+                    entryColor(th, e, selected || multi);
+                if (!active)
+                    nameC = withAlpha(nameC, selected || multi ? 0.90f : 0.58f);
                 text(app, fm.mono, entryLabel(e), x + pad + leadW, y, nameW, rowH,
-                     entryColor(th, e, selected || multi));
+                     nameC);
             }
             if (showMeta) {
                 // Name > modified > size: three brightness levels instead of
                 // one flat dim tone for all metadata.
-                const D2D1_COLOR_F sizeC =
-                    withAlpha(th.text, rowStrong ? 0.56f : 0.36f);
-                const D2D1_COLOR_F whenC =
-                    withAlpha(th.text, rowStrong ? 0.66f : 0.48f);
+                const float metaDim = active ? 1.0f : 0.62f;
+                const D2D1_COLOR_F sizeC = withAlpha(
+                    th.text, (rowStrong ? 0.56f : 0.36f) * metaDim);
+                const D2D1_COLOR_F whenC = withAlpha(
+                    th.text, (rowStrong ? 0.66f : 0.48f) * metaDim);
                 const float whenX = x + colW - rightPad - whenW;
                 const float sizeX = whenX - sizeW - dpi(app, 10);
                 if (e.kind != Kind::Folder)

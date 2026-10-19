@@ -69,6 +69,14 @@ Screenshots live in `out/polish/`.
 - Folder chevrons switch to the text colour on a selected row.
 - Screenshot: `out/badge/01-selected-badges.png`.
 
+## Column hierarchy
+
+- Opening a folder keeps the parent column visible but dims its names, badges,
+  chevrons and metadata; the active column stays at full contrast.
+- The effect is intentionally moderate (around 58% for inactive names) so the
+  parent is still readable.
+- Screenshot: `out/meta/01-columns.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the
