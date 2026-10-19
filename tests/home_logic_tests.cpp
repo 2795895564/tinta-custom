@@ -104,6 +104,22 @@ int main() {
     land(s, kHomeCurrent, L(L"C:\\notes\\proj", {E(L"a.md", Kind::Document), E(L"c.md", Kind::Document)}));
     CHECK(homeSelected(s)->name == L"c.md");
 
+    // multi-select: Space toggles, Ctrl+A selects the view, Esc clears
+    CHECK(homeSelectionCount(s) == 0);
+    CHECK(homeKey(s, 0x20, false, false) && homeSelectionCount(s) == 1 &&
+          homeIsSelected(s, L"c.md"));
+    homeKey(s, 'K', false, false);
+    CHECK(homeKey(s, 0x20, false, false) && homeSelectionCount(s) == 2 &&
+          homeIsSelected(s, L"a.md"));
+    CHECK(homeKey(s, 'A', true, false) && homeSelectionCount(s) == 2);
+    CHECK(homeKey(s, 0x1B, false, false) && homeSelectionCount(s) == 0);
+    // A rescan that drops a selected name prunes it.
+    homeKey(s, 0x20, false, false);  // selects a.md
+    land(s, kHomeCurrent, L(L"C:\\notes\\proj", {E(L"c.md", Kind::Document)}));
+    CHECK(homeSelectionCount(s) == 0);
+    land(s, kHomeCurrent, L(L"C:\\notes\\proj",
+                            {E(L"a.md", Kind::Document), E(L"c.md", Kind::Document)}));
+
     // search typing is swallowed from shortcuts; '/' echo is dropped
     CHECK(homeKey(s, 0xBF, false, false) && s.searching);
     CHECK(homeChar(s, L'/') && s.query.empty());

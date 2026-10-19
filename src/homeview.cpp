@@ -1342,12 +1342,18 @@ void renderHome(App& app) {
             if (row >= (int)col.view->size()) break;
             const Entry& e = col.listing->entries[(*col.view)[row]];
             const bool selected = row == col.sel;
+            const bool multi = active && homeIsSelected(H, e.name);
             const bool hovered = ci == H.hoverColumn && row == H.hoverRow;
             if (selected) {
                 fill(app, x + 1, y, x + colW - 1, y + rowH,
                      mix(th.background, th.accent, th.isDark ? 0.22f : 0.16f));
                 fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
                      y + rowH - dpi(app, 2), th.accent);
+            } else if (multi) {
+                fill(app, x + 1, y, x + colW - 1, y + rowH,
+                     mix(th.background, th.accent, th.isDark ? 0.14f : 0.10f));
+                fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
+                     y + rowH - dpi(app, 2), withAlpha(th.accent, 0.65f));
             } else if (hovered) {
                 fill(app, x + 1, y, x + colW - 1, y + rowH,
                      mix(th.background, th.text, th.isDark ? 0.10f : 0.075f));
@@ -1369,7 +1375,7 @@ void renderHome(App& app) {
             }
 
             text(app, fm.mono, entryLabel(e), x + pad + leadW, y, nameW, rowH,
-                 entryColor(th, e, selected));
+                 entryColor(th, e, selected || multi));
             if (showMeta) {
                 // Name > modified > size: three brightness levels instead of
                 // one flat dim tone for all metadata.
@@ -1402,7 +1408,13 @@ void renderHome(App& app) {
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else {
         std::wstring info;
-        if (const Entry* e = homeSelected(H)) {
+        const size_t selectedCount = homeSelectionCount(H);
+        if (selectedCount > 0) {
+            wchar_t selectedLabel[64];
+            swprintf_s(selectedLabel, _countof(selectedLabel),
+                       tr(app, "home.selected"), (unsigned)selectedCount);
+            info = selectedLabel;
+        } else if (const Entry* e = homeSelected(H)) {
             info = e->kind == Kind::Folder
                        ? e->name + L"  \x00B7  " + tr(app, "home.folder")
                        : e->name + L"  \x00B7  " + dirmodel::formatSize(e->size);

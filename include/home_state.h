@@ -80,6 +80,8 @@ struct HomeState {
     int sel = 0;            // position in view
     int topRow = 0;
     int visibleRows = 20;   // written by the renderer each frame
+    // Multi-select for the active directory: lowercase names survive rescans.
+    std::set<std::wstring> selected;
 
     std::wstring query;
     bool searching = false;
@@ -161,6 +163,8 @@ void homeApplyListing(HomeState& s, int slot, uint32_t gen, dirmodel::Listing&& 
 void homeApplyPreviewText(HomeState& s, uint32_t gen, const std::wstring& path,
                           std::wstring&& text);
 const dirmodel::Entry* homeSelected(const HomeState& s);
+size_t homeSelectionCount(const HomeState& s);
+bool homeIsSelected(const HomeState& s, const std::wstring& name);
 void homeMoveTo(HomeState& s, int index);
 void homeMove(HomeState& s, int delta);
 void homeActivate(HomeState& s);

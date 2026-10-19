@@ -237,6 +237,7 @@ void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& sel
     s.restoreName = select;
     s.current = Listing{};
     s.view.clear();
+    s.selected.clear();  // selection belongs to the directory being left
     s.sel = s.topRow = 0;
     s.loading = true;
     clearPreview(s);
@@ -263,6 +264,14 @@ void homeApplyListing(HomeState& s, int slot, uint32_t gen, Listing&& l) {
             if (it != s.lastPick.end()) prefer = it->second;
         }
         rebuildView(s, prefer);
+        // A rescan may have removed entries; drop stale selected names.
+        for (auto it = s.selected.begin(); it != s.selected.end();) {
+            bool found = false;
+            for (const auto& e : s.current.entries)
+                if (lower(e.name) == *it) { found = true; break; }
+            if (!found) it = s.selected.erase(it);
+            else ++it;
+        }
     } else {
         if (l.path != s.previewTarget) return;
         sortEntries(l.entries, s.opts);
@@ -281,6 +290,12 @@ const Entry* homeSelected(const HomeState& s) {
     int idx = s.view[s.sel];
     if (idx < 0 || idx >= (int)s.current.entries.size()) return nullptr;
     return &s.current.entries[idx];
+}
+
+size_t homeSelectionCount(const HomeState& s) { return s.selected.size(); }
+
+bool homeIsSelected(const HomeState& s, const std::wstring& name) {
+    return s.selected.find(lower(name)) != s.selected.end();
 }
 
 void homeMoveTo(HomeState& s, int index) {
@@ -379,6 +394,14 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
                       END = 0x23, HOME = 0x24, LEFT = 0x25, UP = 0x26, RIGHT = 0x27,
                       DOWN = 0x28, DEL = 0x2E, PERIOD = 0xBE, SLASH = 0xBF,
                       F2 = 0x71 };
+    if (ctrl && vk == 'A' && !s.searching) {
+        s.selected.clear();
+        for (int idx : s.view) {
+            if (idx >= 0 && idx < (int)s.current.entries.size())
+                s.selected.insert(lower(s.current.entries[idx].name));
+        }
+        return true;
+    }
     if (ctrl) return false;  // Ctrl chords stay with the app
 
     if (s.searching) {
@@ -399,6 +422,14 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
     switch (vk) {
         case DOWN: case 'J': homeMove(s, 1); return true;
         case UP: case 'K': homeMove(s, -1); return true;
+        case 0x20:  // Space toggles the row under the cursor
+            if (const Entry* e = homeSelected(s)) {
+                const std::wstring key = lower(e->name);
+                auto it = s.selected.find(key);
+                if (it == s.selected.end()) s.selected.insert(key);
+                else s.selected.erase(it);
+            }
+            return true;
         case RIGHT: case 'L': case RET: homeActivate(s); return true;
         case LEFT: case 'H': case BACK: homeUp(s); return true;
         case HOME: homeMoveTo(s, 0); return true;
@@ -415,6 +446,7 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             s.screen = HomeScreen::Picker;
             s.refreshRows = true;
             s.repoNotice.clear();
+            s.selected.clear();
             s.lastClickRow = -1;
             s.lastClickTick = 0;
             return true;
@@ -441,8 +473,9 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             return true;
         }
         case ESC:
-            // Always consume: clear the filter when there is one, otherwise
-            // this is the bottom of the Esc stack and does nothing.
+            // Always consume: selection first, then the filter, then a no-op
+            // (Esc never quits).
+            if (!s.selected.empty()) { s.selected.clear(); return true; }
             if (s.query.empty()) return true;
             s.query.clear();
             refilter(s);
@@ -488,6 +521,7 @@ void homeShowPicker(HomeState& s) {
     s.refreshRows = true;
     s.repoNotice.clear();
     s.confirmRemove.clear();
+    s.selected.clear();
     s.lastClickRow = -1;  // do not pair a picker click with an old file click
     s.lastClickTick = 0;
 }
