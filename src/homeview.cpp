@@ -1659,8 +1659,20 @@ void renderHome(App& app) {
             y += rowH;
         }
         if (col.view->empty() && !inlineNew) {
-            const wchar_t* msg = !col.listing->ok ? L"Can't read this folder" : L"Empty folder";
-            text(app, fm.mono, msg, x + pad + leadW, y, colW - pad * 2 - leadW, rowH, dim);
+            std::wstring msg;
+            if (!col.listing->ok)
+                msg = tr(app, "home.read_failed");
+            else if (!H.query.empty())
+                msg = tr(app, "home.no_matches");
+            else
+                msg = tr(app, "home.empty_folder");
+            if (col.listing->ok) {
+                msg += L"  \x00B7  ";
+                msg += tr(app, H.query.empty() ? "home.empty_hint"
+                                               : "home.clear_hint");
+            }
+            text(app, fm.caption, msg, x + pad + leadW, y,
+                 colW - pad * 2 - leadW, rowH, withAlpha(th.text, 0.45f));
         }
         for (int n = 0; n < colVisible; n++) {
             int row = topRow + n;
@@ -1678,9 +1690,9 @@ void renderHome(App& app) {
                      y + rowH - dpi(app, 2), th.accent);
             } else if (multi) {
                 fill(app, x + 1, y, x + colW - 1, y + rowH,
-                     mix(th.background, th.accent, th.isDark ? 0.14f : 0.10f));
+                     mix(th.background, th.accent, th.isDark ? 0.18f : 0.13f));
                 fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
-                     y + rowH - dpi(app, 2), withAlpha(th.accent, 0.65f));
+                     y + rowH - dpi(app, 2), withAlpha(th.accent, 0.82f));
             } else if (hovered) {
                 fill(app, x + 1, y, x + colW - 1, y + rowH,
                      mix(th.background, th.text, th.isDark ? 0.10f : 0.075f));
@@ -1711,8 +1723,9 @@ void renderHome(App& app) {
             if (showMeta) {
                 // Name > modified > size: three brightness levels instead of
                 // one flat dim tone for all metadata.
-                const D2D1_COLOR_F sizeC = withAlpha(th.text, selected ? 0.56f : 0.36f);
-                const D2D1_COLOR_F whenC = withAlpha(th.text, selected ? 0.66f : 0.48f);
+                const bool strong = selected || multi;
+                const D2D1_COLOR_F sizeC = withAlpha(th.text, strong ? 0.56f : 0.36f);
+                const D2D1_COLOR_F whenC = withAlpha(th.text, strong ? 0.66f : 0.48f);
                 const float whenX = x + colW - rightPad - whenW;
                 const float sizeX = whenX - sizeW - dpi(app, 10);
                 if (e.kind != Kind::Folder)
@@ -1791,7 +1804,12 @@ void renderHome(App& app) {
             if (!info.empty()) info += L"  \x00B7  ";
             info += clip;
         }
-        const std::wstring hints = tr(app, "home.footer");
+        const std::wstring hints =
+            selectedCount > 0
+                ? std::wstring(tr(app, "home.footer_selected"))
+                : (!H.clipboard.empty()
+                       ? std::wstring(tr(app, "home.footer_clipboard"))
+                       : std::wstring(tr(app, "home.footer")));
         const float hintW = measureText(app, hints, fm.right) + dpi(app, 6);
         const bool showHints = !inlineEdit && W - 2 * pad > hintW + dpi(app, 220);
         if (showHints) {

@@ -45,6 +45,7 @@
 | D16 | Home 多选删除 | `[已验证]` | `D`/`Delete` 对选中项生效；确认框显示 `Move N items…`；全部送回收站，成功/失败计数；无选择时仍删当前项 | `home_logic_tests`；探针删除 a/b、保留 c；`out/delete/*.png` |
 | D17 | 粘贴重名冲突提示 | `[已验证]` | `Ctrl+V` 发现重名时弹出紧凑卡片：标题 + 冲突文件（最多 4 个）+ 操作提示；Enter 跳过、O 覆盖、Esc 取消 | 探针：Enter 后 a 保持 OLD、b 贴入；O 后 a 变 NEW；`out/prompt/02-compact-popup.png` |
 | D18 | 移动/复制撤销 | `[已验证]` | 每次成功粘贴记录 source/target；`Ctrl+Z` 把移动项移回，或把复制项送回收站；覆盖粘贴不进入撤销栈；新/改名/删除会清空撤销 | 探针：移动 a 后 Ctrl+Z 源恢复；复制 b 后 Ctrl+Z 目标移除；`out/undo/*.png` |
+| D19 | Home 状态与空状态打磨 | `[已验证]` | 多选底色/色条更明显，元数据随选中提亮；底部提示随选择/剪贴板切换；空目录、无匹配、读取失败均有本地化文案和下一步提示 | `out/polish/01-empty.png`、`02-no-matches.png`、`03-selected.png` |
 
 ## C. 提案 / 待决定
 
@@ -91,6 +92,7 @@
 | V20 | Home 多选删除 | `[已验证]` | 选中 2 项按 D → 确认 `Move 2 items…` → Enter 后两项进回收站，未选中项保留 | `out/delete/*.png`；探针检查文件系统；`home_logic_tests` 覆盖 dialogTargets |
 | V21 | 粘贴重名处理 | `[已验证]` | 430×200 紧凑卡片列出冲突与 Enter/O/Esc；Enter 跳过并粘贴其余，O 覆盖文件内容 | `out/prompt/02-compact-popup.png`；探针验证 OLD→NEW |
 | V22 | 移动/复制撤销 | `[已验证]` | Ctrl+Z 移动回源、复制项移除；失败计数；无操作时提示 Nothing to undo | `out/undo/02-undo-move.png`、`03-undo-copy.png`；探针检查磁盘 |
+| V23 | Home 状态打磨 | `[已验证]` | 多选行更清晰；选中时底部显示 `Ctrl+C/X`、`D`、`Esc`；空目录 `Empty folder · n new file`；搜索无结果 `No matches · Esc clear` | `out/polish/01-03*.png` |
 
 ## F. 环境限制
 
@@ -120,3 +122,4 @@
 - 2026-10-20：Home 多选删除：`D`/Delete 把 `dialogTargets` 填成选中项，确认框显示 `Move N items…`，批量送回收站并报告成功/失败；探针删除 a/b 后 c 保留。
 - 2026-10-20：粘贴重名提示重新设计为紧凑卡片（430×200）：标题、冲突文件（最多 4 个 +N）、Enter/O/Esc 提示，以及颜色区分的 Skip/Overwrite 按钮；去掉大块空白。
 - 2026-10-20：移动/复制撤销：成功粘贴记录 source/target；Ctrl+Z 移动项移回、复制项送回收站；覆盖粘贴和删除/改名后不可撤销；探针验证 a 移回、b 副本移除。
+- 2026-10-20：Home 打磨第一轮：多选状态增强、底部快捷键提示随上下文切换、空目录/无匹配/读取失败改为本地化文案并给出下一步提示。
