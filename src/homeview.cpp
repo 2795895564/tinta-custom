@@ -828,6 +828,7 @@ bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y) {
     x -= (int)documentViewportX(app);  // rects are recorded in the translated space
     auto in = [&](const HomeRect& r) { return x >= r.l && x < r.r && y >= r.t && y < r.b; };
     if (H.screen == HomeScreen::Picker) {
+        H.confirmRemove.clear();
         if (H.hasBrowseBtn && in(H.browseBtn)) {
             H.pendingBrowse = true;
         } else {

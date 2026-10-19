@@ -41,6 +41,9 @@ request path (`r` on a missing row) is covered by `home_logic_tests`.
 11. Press `d` on a missing row. The footer says
     `A missing repository cannot be the startup repository.` and settings are
     unchanged.
+12. Press `x` once: the footer asks to press X again. Press `x` again: the repo
+    disappears from settings; the folder on disk is untouched. A first `x`
+    followed by `j`/Enter/click cancels the pending removal.
 
 ## What is not automated
 
@@ -51,6 +54,5 @@ request path (`r` on a missing row) is covered by `home_logic_tests`.
 
 ## Remaining work in P3
 
-- Remove-repository confirmation (`x` still forgets immediately).
 - A visible button for relocate/default, beyond the `r`/`d` keys and
-  double-click.
+  double-click. (The keyboard and double-click paths are complete.)

@@ -19,7 +19,7 @@
 | F10 | 快速跳转不存在（P2b 前） | `[已废弃]` | 已实现：`Ctrl+K` 浮层、输入/结果/键鼠、后台索引、最近空状态、文件夹跳转 | `tests/validate_quickjump.ps1` 19/19；`tests/quickjump_tests.cpp` |
 | F11 | 全仓库索引不存在 | `[现状]` | 搜索只扫当前文件同级目录，最多 400 个 | [search.cpp](../src/search.cpp#L124-L174) |
 | F12 | Home 文件操作不存在（P1b 前） | `[已废弃]` | 已实现：新建文件/文件夹、重命名、删除到回收站（带确认和校验） | `tests/validate_home_file_ops.ps1` 5/5；`out/home-file-ops` |
-| F13 | 仓库重新定位/设为默认不存在 | `[已验证]` | Picker 中标记 `folder missing` 的行可按 `r` 重新定位；按 `d` 设为启动仓库；保留 repo id/name，拒绝重复路径和缺失仓库 | `home_logic_tests`；用户手工重定位通过；`out/repo-default/*.png` |
+| F13 | 仓库重新定位/设为默认不存在 | `[已验证]` | Picker 中标记 `folder missing` 的行可按 `r` 重定位；按 `d` 设为启动仓库；`x` 两次确认才移除；保留 repo id/name，拒绝重复路径和缺失仓库 | `home_logic_tests`；用户手工重定位通过；`out/repo-default/*.png` |
 | F14 | 设置写失败只覆盖部分路径 | `[现状]` | 仓库添加/设置页有提示；`persistLastDir` 等忽略返回值 | [homeview.cpp](../src/homeview.cpp#L147-L157)、[overlays.cpp](../src/overlays.cpp#L3216-L3223) |
 | F15 | `j` 下、`k` 上 | `[现状]` | Home、Picker、阅读滚动一致 | [home_logic.cpp](../src/home_logic.cpp#L244-L248) |
 | F16 | 非 md 不等于不可打开 | `[现状]` | `.txt`、`.mmd`、`.puml/.plantuml` 都是支持类型 | [document.cpp](../src/document.cpp#L103-L123) |
@@ -39,6 +39,7 @@
 | D10 | P2a 仓库索引与匹配 | `[已验证]` | `workspace_index` 扫描 + 纯 query | `tests/workspace_index_tests.cpp` 通过；标题/隐藏/截断/排序覆盖 |
 | D11 | P2b `Ctrl+K` 浮层 | `[已验证]` | 固定 `Ctrl+K`；Enter 在当前窗口打开/激活标签（不新开窗口），Esc 关闭并回原 Base；后台扫描带 generation，过期结果丢弃；文件夹结果跳 Home | `tests/quickjump_tests.cpp`；`tests/validate_quickjump.ps1` 19/19 |
 | D12 | P3 仓库重定位与启动仓库 | `[已验证]` | Picker 选中 `folder missing` 行按 `r` 重定位；按 `d` 把选中仓库设为启动仓库；保留 id/name，重复路径和缺失仓库拒绝 | `home_logic_tests`；用户手工重定位通过；默认仓库写入 settings 并显示 default 标记 |
+| D13 | P3 移除仓库二次确认 | `[已验证]` | `x`/Delete 第一次只提示，同一行再按一次才遗忘；移动/打开/点击会取消确认 | `home_logic_tests` 覆盖首次 arm 与二次 remove |
 
 ## C. 提案 / 待决定
 
@@ -79,6 +80,7 @@
 | V14 | Quick Jump IME 路径 | `[实现中]` | 组合窗定位到查询光标，`GCS_RESULTSTR` 批量写入并吞掉重复 WM_CHAR | 代码路径与 Home 对话框一致；真实输入法候选窗位置仍需人工目测 |
 | V15 | P3 仓库重新定位 | `[已验证]` | 缺失仓库 → Picker → `r` → 选择新目录 → Home 直接打开新路径；重复路径拒绝 | 用户手工验收通过；`home_logic_tests`；`out/repo-relocate/*.png` |
 | V16 | P3 启动仓库 | `[已验证]` | Picker 按 `d` → currentRepoId=选中、startupMode=last、settings 落盘、行尾显示 default；缺失行拒绝 | 探针读取 settings：`repoCurrent=r1`、`startupMode=0`；`out/repo-default/*.png` |
+| V17 | P3 移除仓库二次确认 | `[已验证]` | `x` 第一次提示 “Press X again…”，第二次才 forget；不改磁盘文件夹 | `home_logic_tests` 通过 |
 
 ## F. 环境限制
 
@@ -101,3 +103,4 @@
 - 2026-10-20：修复 Quick Jump 真实输入与长文件名：命令键返回 `true`、可打印键返回 `false`，恢复 `TranslateMessage → WM_CHAR`；结果名/路径改用省略号 trimming，查询框加裁剪。验证脚本改走 `WM_KEYDOWN → TranslateMessage`，新增超长文件名 fixture，19/19。
 - 2026-10-20：P3 开始——缺失仓库重新定位。Picker 的 `folder missing` 行按 `R` 打开目录选择框，更新 path/lastDir/currentRepoId 并保留 id/name；重复路径红字拒绝。`home_logic_tests` 通过；手工选目录验收待做。
 - 2026-10-20：P3 完成——Picker 按 `d` 设为启动仓库（currentRepoId + startupMode=last），行尾显示 `default`；缺失仓库拒绝。`home_logic_tests` 通过；探针确认 settings 与默认标记。用户已手工验收重定位。
+- 2026-10-20：P3 收尾——`x`/Delete 移除仓库改为二次确认，首次只提示且移动/打开/点击会取消；`home_logic_tests` 通过。

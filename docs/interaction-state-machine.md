@@ -80,6 +80,7 @@ Modal > Overlay > Text > Base
 | `RepoPicker` | Workspace | `o` | 固定 | `[现状]` |
 | `RelocateRepo` | Home.Picker | `r` | 固定 | `[已验证]` |
 | `SetDefaultRepo` | Home.Picker | `d` | 固定 | `[已验证]` |
+| `ForgetRepo` | Home.Picker | `x` / `Delete` ×2 | 固定 | `[已验证]` |
 | `GoHome` | Document | `Esc` | 固定 | `[已验证]` |
 | `MoveUp` / `MoveDown` | Home/Picker | `k` / `j` | profile | `[现状]` |
 | `OpenEntry` | Home/Picker | `Enter` / `l` / `→` | profile | `[现状]` |
@@ -153,6 +154,7 @@ stateDiagram-v2
 | `Home.Picker` | `OpenRepo` | 仓库存在 | `Home.Files` | 载入 lastDir、扫描目录 |
 | `Home.Picker` | `RelocateRepo` | 选中行 missing | `Home.Files` | 选目录 → 更新 settings → 打开仓库 |
 | `Home.Picker` | `SetDefaultRepo` | 选中行存在 | `Home.Picker` | currentRepoId=选中；startupMode=last；保存 settings |
+| `Home.Picker` | `ForgetRepo` | 同一行第二次 `x` | `Home.Picker` | 从 settings 移除；磁盘文件夹不动 |
 | `Home.Picker` | `Dismiss` | 有当前仓库 | `Home.Files` | 无 |
 | `Home.Files` | `RepoPicker` | — | `Home.Picker` | 记住 lastDir |
 | `Home.Files` | `OpenDir` | 目录可读 | `Home.Files` | 压入新列 |

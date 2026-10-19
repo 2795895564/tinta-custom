@@ -188,7 +188,9 @@ int main() {
     CHECK(homeKey(p, 'O', true, false) && p.pendingBrowse);       // Ctrl+O: add folder
     p.pendingBrowse = false;
     CHECK(homeKey(p, 'O', false, false) && p.pendingBrowse);
-    CHECK(homeKey(p, 'X', false, false) && p.pendingRemove == "r2");
+    p.pendingRemove.clear();
+    CHECK(homeKey(p, 'X', false, false) && p.pendingRemove.empty() && p.confirmRemove == "r2");
+    CHECK(homeKey(p, 'X', false, false) && p.pendingRemove == "r2" && p.confirmRemove.empty());
     CHECK(!homeKey(p, 'T', true, false));                          // other Ctrl chords untouched
     CHECK(homeKey(p, 0x1B, false, false) && p.screen == HomeScreen::Picker);  // no repo: Esc stays
     homeSetRoot(p, L"C:\\notes", L""); homeShowPicker(p);

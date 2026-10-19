@@ -309,6 +309,10 @@ void homeUp(HomeState& s) {
 // folder, x/Delete forgets a repo (the folder on disk is never touched).
 static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
     enum : unsigned { RET = 0x0D, ESC = 0x1B, UP = 0x26, DOWN = 0x28, DEL = 0x2E };
+    if (vk != DEL && vk != 'X' && !s.confirmRemove.empty()) {
+        s.confirmRemove.clear();
+        s.repoNotice.clear();
+    }
     if (ctrl) {
         if (vk != 'O') return false;
         s.pendingBrowse = true;
@@ -344,7 +348,18 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
             }
             return true;
         case DEL: case 'X':
-            if (n) s.pendingRemove = s.repoRows[s.repoSel].id;
+            if (n) {
+                const std::string id = s.repoRows[s.repoSel].id;
+                if (s.confirmRemove == id) {
+                    s.pendingRemove = id;
+                    s.confirmRemove.clear();
+                    s.repoNotice.clear();
+                } else {
+                    s.confirmRemove = id;
+                    s.repoNotice =
+                        L"Press X again to forget this repository (the folder stays on disk).";
+                }
+            }
             return true;
         case ESC:
             // The picker is the bottom of the Esc stack when no repository is
@@ -472,6 +487,7 @@ void homeShowPicker(HomeState& s) {
     s.screen = HomeScreen::Picker;
     s.refreshRows = true;
     s.repoNotice.clear();
+    s.confirmRemove.clear();
     s.lastClickRow = -1;  // do not pair a picker click with an old file click
     s.lastClickTick = 0;
 }

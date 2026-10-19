@@ -117,6 +117,7 @@ struct HomeState {
     bool refreshRows = false;
     bool pendingBrowse = false;
     std::string pendingChoose, pendingRemove, pendingRelocate, pendingDefault;
+    std::string confirmRemove;  // X once arms, X again forgets
     HomeRect browseBtn;
     bool hasBrowseBtn = false;
 
