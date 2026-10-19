@@ -172,6 +172,11 @@ int main() {
           d.dialogText == L"proj");
     homeDialogClose(d);
     CHECK(homeKey(d, 'D', false, false) && d.dialog == HomeDialogKind::ConfirmDelete);
+    CHECK(d.dialogChoice == 1);
+    CHECK(homeKey(d, 0x25, false, false) && d.dialogChoice == 0);
+    CHECK(homeKey(d, 0x0D, false, false) && d.dialog == HomeDialogKind::None &&
+          !d.dialogCommit);
+    CHECK(homeKey(d, 'D', false, false) && d.dialogChoice == 1);
     CHECK(homeKey(d, 0x0D, false, false) && d.dialogCommit);
     homeDialogClose(d);
     // Multi-select delete: the confirm dialog carries every marked name.

@@ -42,12 +42,15 @@ Screenshots live in `out/polish/`.
 
 ## Dialog buttons
 
-- Delete confirmation: `Delete` carries a persistent focus ring (Enter) and
-  `Cancel` gets a filled hover state.
-- Paste-conflict card: the focus ring follows the mouse and Left/Right/Tab.
-- Button fills keep a clear contrast between the neutral cancel/skip action
-  and the red destructive/overwrite action.
-- Screenshot: `out/dialog/01-delete.png`.
+- The focused button is filled with the ink colour and uses background-coloured
+  text; the unfocused button is an outline.
+- A focused destructive action keeps a small red bar, so danger is still visible
+  without the whole button using the selection accent.
+- Delete confirmation: Left/Right/Tab switches Cancel/Delete; Enter runs the
+  focused action; Esc still cancels.
+- Paste-conflict card: the same focus style follows the mouse and Left/Right.
+- Screenshots: `out/dialog2/01-delete-focused.png`,
+  `02-cancel-focused.png`.
 
 ## Limits
 

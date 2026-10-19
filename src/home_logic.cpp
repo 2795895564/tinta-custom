@@ -131,6 +131,7 @@ void beginDialog(HomeState& s, HomeDialogKind kind) {
     s.undoTransfers.clear();
     s.dialog = kind;
     s.dialogHover = -1;
+    s.dialogChoice = kind == HomeDialogKind::ConfirmDelete ? 1 : 0;
     s.dialogCommit = false;
     s.dialogError = HomeDialogError::None;
     s.dialogErrorCode = 0;
@@ -169,7 +170,16 @@ void beginDialog(HomeState& s, HomeDialogKind kind) {
 
 bool dialogKey(HomeState& s, unsigned vk) {
     if (s.dialog == HomeDialogKind::ConfirmDelete) {
-        if (vk == 0x0D || vk == 'Y') { s.dialogCommit = true; return true; }
+        if (vk == 0x25 || vk == 0x27 || vk == 0x09) {
+            s.dialogChoice ^= 1;
+            return true;
+        }
+        if (vk == 0x0D) {
+            if (s.dialogChoice == 0) homeDialogClose(s);
+            else s.dialogCommit = true;
+            return true;
+        }
+        if (vk == 'Y') { s.dialogCommit = true; return true; }
         if (vk == 0x1B || vk == 'N') { homeDialogClose(s); return true; }
         return true;  // modal: swallow everything else
     }
@@ -245,6 +255,7 @@ void homeDialogClose(HomeState& s) {
     s.dialogOriginal.clear();
     s.dialogTargets.clear();
     s.dialogHover = -1;
+    s.dialogChoice = 1;
     s.pasteConflicts.clear();
     s.pasteConflictChoice = 0;
     s.dialogParent.clear();

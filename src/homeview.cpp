@@ -1048,10 +1048,16 @@ bool homeOnMouseMove(App& app, HWND hwnd, int x, int y) {
         else if (in(H.dialogCancelHit)) hover = 0;
         bool changed = hover != H.dialogHover;
         H.dialogHover = hover;
-        if (H.dialog == HomeDialogKind::ConfirmPasteConflicts && hover >= 0 &&
-            H.pasteConflictChoice != hover) {
-            H.pasteConflictChoice = hover;
-            changed = true;
+        if (hover >= 0) {
+            if (H.dialog == HomeDialogKind::ConfirmPasteConflicts &&
+                H.pasteConflictChoice != hover) {
+                H.pasteConflictChoice = hover;
+                changed = true;
+            } else if (H.dialog == HomeDialogKind::ConfirmDelete &&
+                       H.dialogChoice != hover) {
+                H.dialogChoice = hover;
+                changed = true;
+            }
         }
         if (changed) InvalidateRect(hwnd, nullptr, FALSE);
         return true;
@@ -1418,44 +1424,48 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     const D2D1_COLOR_F primaryColor =
         (confirm || pasteConflict) ? D2D1::ColorF(0.78f, 0.38f, 0.34f)
                                    : th.accent;
-    const bool primaryHover = H.dialogHover == 1;
-    const bool cancelHover = H.dialogHover == 0;
-    if (cancelHover || (pasteConflict && H.pasteConflictChoice == 0)) {
-        fillRound(app, cancelX, buttonsY, cancelX + cancelW,
-                  buttonsY + dpi(app, 30), dpi(app, 6),
-                  mix(th.background, th.accent, cancelHover ? 0.22f : 0.16f));
-    }
-    fillRound(app, primaryX, buttonsY, primaryX + primaryW,
+    const int focus = pasteConflict ? H.pasteConflictChoice : H.dialogChoice;
+    const bool primaryFocused = focus == 1;
+    const bool cancelFocused = focus == 0;
+    const D2D1_COLOR_F focusedFill = th.heading;
+    const D2D1_COLOR_F buttonBg =
+        mix(th.background, th.text, th.isDark ? 0.06f : -0.02f);
+    // Unfocused buttons are outlines; the focused one gets an ink fill. This
+    // keeps focus distinct from the accent used by row selection.
+    fillRound(app, cancelX, buttonsY, cancelX + cancelW,
               buttonsY + dpi(app, 30), dpi(app, 6),
-              mix(primaryColor, th.text, primaryHover ? 0.12f : 0.0f));
+              cancelFocused ? focusedFill : buttonBg);
     strokeRound(app, cancelX + 0.5f, buttonsY + 0.5f, cancelX + cancelW - 0.5f,
                 buttonsY + dpi(app, 30) - 0.5f, dpi(app, 6),
-                withAlpha(th.text, cancelHover ? 0.42f : 0.22f), 1.0f);
-    if (pasteConflict) {
-        const float focusX =
-            H.pasteConflictChoice == 1 ? primaryX : cancelX;
-        const float focusW =
-            H.pasteConflictChoice == 1 ? primaryW : cancelW;
-        strokeRound(app, focusX - dpi(app, 2), buttonsY - dpi(app, 2),
-                    focusX + focusW + dpi(app, 2),
+                withAlpha(th.text, cancelFocused ? 0.92f : 0.28f), 1.0f);
+    fillRound(app, primaryX, buttonsY, primaryX + primaryW,
+              buttonsY + dpi(app, 30), dpi(app, 6),
+              primaryFocused ? focusedFill : buttonBg);
+    strokeRound(app, primaryX + 0.5f, buttonsY + 0.5f,
+                primaryX + primaryW - 0.5f,
+                buttonsY + dpi(app, 30) - 0.5f, dpi(app, 6),
+                withAlpha(primaryFocused ? th.text : primaryColor,
+                          primaryFocused ? 0.92f : 0.52f), 1.0f);
+    if (primaryFocused && (confirm || pasteConflict)) {
+        // Keep a red danger cue without turning the whole focused button red.
+        fillRound(app, primaryX + dpi(app, 8), buttonsY + dpi(app, 7),
+                  primaryX + dpi(app, 11), buttonsY + dpi(app, 23),
+                  dpi(app, 1.5f), D2D1::ColorF(0.86f, 0.36f, 0.30f));
+    }
+    if (primaryFocused || cancelFocused) {
+        const float fox = primaryFocused ? primaryX : cancelX;
+        const float fow = primaryFocused ? primaryW : cancelW;
+        strokeRound(app, fox - dpi(app, 2), buttonsY - dpi(app, 2),
+                    fox + fow + dpi(app, 2),
                     buttonsY + dpi(app, 30) + dpi(app, 2), dpi(app, 8),
-                    withAlpha(th.accent, 0.95f), 2.0f);
-    } else {
-        // Delete has one confirm action; keep the ring on it so Enter is clear.
-        strokeRound(app, primaryX - dpi(app, 2), buttonsY - dpi(app, 2),
-                    primaryX + primaryW + dpi(app, 2),
-                    buttonsY + dpi(app, 30) + dpi(app, 2), dpi(app, 8),
-                    withAlpha(th.accent, primaryHover ? 0.95f : 0.55f), 1.6f);
+                    withAlpha(th.text, 0.55f), 1.4f);
     }
     text(app, fm.button, primary, primaryX, buttonsY, primaryW, dpi(app, 30),
-         th.background);
+         primaryFocused ? th.background : primaryColor);
     text(app, fm.button, pasteConflict ? tr(app, "home.paste_skip")
                                        : tr(app, "home.cancel"),
          cancelX, buttonsY, cancelW, dpi(app, 30),
-         withAlpha(th.text, (cancelHover || (pasteConflict &&
-                                            H.pasteConflictChoice == 0))
-                                ? 0.95f
-                                : 0.78f));
+         cancelFocused ? th.background : withAlpha(th.text, 0.78f));
 }
 
 void renderHome(App& app) {
