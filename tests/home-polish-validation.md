@@ -87,6 +87,15 @@ Screenshots live in `out/polish/`.
 - Narrow windows still clamp to the available width.
 - Screenshots: `out/full/04-width2-root.png`, `05-width2-two.png`.
 
+## Dark theme
+
+- Checked Midnight (theme 5) maximized at 2560×1540.
+- Selected rows keep white text on the cyan accent fill; `MD` uses dark text
+  on the cyan chip; folder chevrons stay legible.
+- Delete dialog: focused Delete is a light ink fill with dark text and the red
+  danger bar; Cancel remains an outline.
+- Screenshots: `out/dark/01-dark.png`, `02-dark-dialog.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the
