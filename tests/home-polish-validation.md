@@ -80,11 +80,12 @@ Screenshots live in `out/polish/`.
 ## Full-screen widths
 
 - Tested maximized on a 2560×1540 work area, not just a 1024×768 window.
-- Single column: 1200 DIP cap, centered; much less empty side margin than before.
-- Two columns: 560 DIP each; three columns: 420 DIP each; group stays centered.
+- Single column: 1000 DIP cap, centered; no longer spans a huge share of a
+  2560-wide screen.
+- Two columns: 520 DIP each (total 1056), so opening a folder barely changes
+  the group width; three columns: 400 each.
 - Narrow windows still clamp to the available width.
-- Screenshots: `out/full/01-full-root.png`, `02-full-two.png`,
-  `03-full-three.png`.
+- Screenshots: `out/full/04-width2-root.png`, `05-width2-two.png`.
 
 ## Limits
 
