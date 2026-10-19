@@ -2361,6 +2361,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     if (homeStartup) {
         tabsSeedWorkspace(app, restoreSession ? sessionPaths
                                               : std::vector<std::string>{});
+        // Home stays tab 0, but a restored session resumes the document tab
+        // that was active instead of always dropping the user back on Home.
+        if (restoreSession && savedSettings.sessionActive > 0 &&
+            savedSettings.sessionActive < (int)sessionPaths.size()) {
+            tabActivate(app, app.hwnd, 1 + savedSettings.sessionActive);
+        }
     } else if (restoreSession && !app.currentFile.empty()) {
         tabsSeedSession(app, sessionPaths);
     } else {
