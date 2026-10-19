@@ -513,6 +513,34 @@ void strokeRound(App& app, float l, float t, float r, float b, float radius,
         D2D1::RoundedRect(D2D1::RectF(l, t, r, b), rad, rad), app.brush, width);
 }
 
+// In-place name editor used by rename and by the new-file/new-folder phantom
+// row. It owns the IME anchor so composition follows the inline caret.
+void inlineNameField(App& app, HomeState& H, const Fmts& fm, float x, float y,
+                     float w, float h, const D2DTheme& th) {
+    H.dialogFieldHit = HomeRect{x, y, x + w, y + h};
+    fillRound(app, x, y, x + w, y + h, dpi(app, 5),
+              mix(th.background, th.text, th.isDark ? 0.07f : -0.04f));
+    strokeRound(app, x + 0.5f, y + 0.5f, x + w - 0.5f, y + h - 0.5f,
+                dpi(app, 5), withAlpha(th.accent, 0.62f), 1.0f);
+    const float textX = x + dpi(app, 8);
+    const int caret = std::clamp(H.dialogCaret, 0, (int)H.dialogText.size());
+    const std::wstring before = H.dialogText.substr(0, caret);
+    const float caretX = textX + measureText(app, before, fm.mono);
+    H.dialogCaretX = caretX;
+    H.dialogCaretY = y + h / 2.0f;
+    if (H.dialogText.empty()) {
+        const wchar_t* placeholder =
+            H.dialog == HomeDialogKind::NewFolder ? tr(app, "home.new_folder")
+                                                  : tr(app, "home.new_file");
+        text(app, fm.mono, placeholder, textX, y, w - dpi(app, 16), h,
+             withAlpha(th.text, 0.35f));
+    } else {
+        text(app, fm.mono, H.dialogText, textX, y, w - dpi(app, 16), h, th.text);
+    }
+    fill(app, caretX, y + dpi(app, 5), caretX + dpi(app, 1.6f),
+         y + h - dpi(app, 5), th.accent);
+}
+
 // A small badge label for a file row: MD, TXT, PDF, IMG, ...
 std::wstring fileTypeTag(const Entry& e) {
     if (e.kind == Kind::Folder) return L"";
@@ -1142,6 +1170,10 @@ void renderHome(App& app) {
     HomeState& H = app.home;
     H.rowHits.clear();
     H.columnHits.clear();
+    if (H.dialog != HomeDialogKind::ConfirmDelete) {
+        H.dialogPrimaryHit = HomeRect{};
+        H.dialogCancelHit = HomeRect{};
+    }
     if (!app.renderTarget || !app.brush || !app.dwriteFactory) return;
     homeEnsureRoot(app);
 
@@ -1293,6 +1325,10 @@ void renderHome(App& app) {
         const ColRef& col = cols[ci];
         const float x = startX + ci * (colW + gap);
         const bool active = col.active;
+        const bool inlineNew =
+            active && (H.dialog == HomeDialogKind::NewFile ||
+                       H.dialog == HomeDialogKind::NewFolder);
+        const int colVisible = std::max(1, visibleRows - (inlineNew ? 1 : 0));
         // A soft shadow and a rounded, slightly lifted surface make the
         // columns read as sheets instead of flat boxes.
         const D2D1_COLOR_F shadow = th.isDark ? D2D1::ColorF(0, 0, 0, 0.30f)
@@ -1323,25 +1359,37 @@ void renderHome(App& app) {
              (count > 1 && active) ? th.accent : withAlpha(th.text, 0.58f));
 
         int topRow = col.topRow;
-        int maxTop = std::max(0, (int)col.view->size() - visibleRows);
+        int maxTop = std::max(0, (int)col.view->size() - colVisible);
         topRow = std::clamp(topRow, 0, maxTop);
         if (active && col.sel >= 0) {
             if (col.sel < topRow) topRow = col.sel;
-            else if (col.sel >= topRow + visibleRows) topRow = col.sel - visibleRows + 1;
+            else if (col.sel >= topRow + colVisible) topRow = col.sel - colVisible + 1;
             topRow = std::clamp(topRow, 0, maxTop);
             H.topRow = topRow;
         }
 
         float y = rowsTop;
-        if (col.view->empty()) {
+        if (inlineNew) {
+            fill(app, x + 1, y, x + colW - 1, y + rowH,
+                 mix(th.background, th.accent, th.isDark ? 0.14f : 0.10f));
+            const wchar_t* tag =
+                H.dialog == HomeDialogKind::NewFolder ? L"DIR" : L"MD";
+            text(app, fm.tag, tag, x + pad, y, badgeW, rowH, th.accent);
+            inlineNameField(app, H, fm, x + pad + leadW, y + dpi(app, 2),
+                            nameW, rowH - dpi(app, 4), th);
+            y += rowH;
+        }
+        if (col.view->empty() && !inlineNew) {
             const wchar_t* msg = !col.listing->ok ? L"Can't read this folder" : L"Empty folder";
             text(app, fm.mono, msg, x + pad + leadW, y, colW - pad * 2 - leadW, rowH, dim);
         }
-        for (int n = 0; n < visibleRows; n++) {
+        for (int n = 0; n < colVisible; n++) {
             int row = topRow + n;
             if (row >= (int)col.view->size()) break;
             const Entry& e = col.listing->entries[(*col.view)[row]];
             const bool selected = row == col.sel;
+            const bool editingName =
+                active && H.dialog == HomeDialogKind::Rename && row == col.sel;
             const bool multi = active && homeIsSelected(H, e.name);
             const bool hovered = ci == H.hoverColumn && row == H.hoverRow;
             if (selected) {
@@ -1374,8 +1422,13 @@ void renderHome(App& app) {
                 text(app, fm.tag, fileTypeTag(e), badgeX, y, badgeW, rowH, tagFg);
             }
 
-            text(app, fm.mono, entryLabel(e), x + pad + leadW, y, nameW, rowH,
-                 entryColor(th, e, selected || multi));
+            if (editingName) {
+                inlineNameField(app, H, fm, x + pad + leadW, y + dpi(app, 2),
+                                nameW, rowH - dpi(app, 4), th);
+            } else {
+                text(app, fm.mono, entryLabel(e), x + pad + leadW, y, nameW, rowH,
+                     entryColor(th, e, selected || multi));
+            }
             if (showMeta) {
                 // Name > modified > size: three brightness levels instead of
                 // one flat dim tone for all metadata.
@@ -1408,8 +1461,36 @@ void renderHome(App& app) {
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else {
         std::wstring info;
+        D2D1_COLOR_F infoColor = withAlpha(th.text, 0.68f);
+        const bool inlineEdit =
+            H.dialog == HomeDialogKind::NewFile ||
+            H.dialog == HomeDialogKind::NewFolder ||
+            H.dialog == HomeDialogKind::Rename;
         const size_t selectedCount = homeSelectionCount(H);
-        if (selectedCount > 0) {
+        if (inlineEdit) {
+            if (H.dialogError == HomeDialogError::Empty) {
+                info = tr(app, "home.name_empty");
+            } else if (H.dialogError == HomeDialogError::Invalid) {
+                info = tr(app, "home.name_invalid");
+            } else if (H.dialogError == HomeDialogError::Exists) {
+                info = tr(app, "home.name_exists");
+            } else if (H.dialogError == HomeDialogError::Failed) {
+                if (H.dialogErrorCode == ERROR_ACCESS_DENIED) {
+                    info = tr(app, "home.op_denied");
+                } else if (H.dialogErrorCode) {
+                    wchar_t buf[160];
+                    swprintf_s(buf, _countof(buf), tr(app, "home.op_failed_code"),
+                               (unsigned)H.dialogErrorCode);
+                    info = buf;
+                } else {
+                    info = tr(app, "home.op_failed");
+                }
+            } else {
+                info = tr(app, "home.dialog_hint");
+            }
+            if (H.dialogError != HomeDialogError::None)
+                infoColor = D2D1::ColorF(0.86f, 0.46f, 0.42f);
+        } else if (selectedCount > 0) {
             wchar_t selectedLabel[64];
             swprintf_s(selectedLabel, _countof(selectedLabel),
                        tr(app, "home.selected"), (unsigned)selectedCount);
@@ -1421,7 +1502,7 @@ void renderHome(App& app) {
         }
         const std::wstring hints = tr(app, "home.footer");
         const float hintW = measureText(app, hints, fm.right) + dpi(app, 6);
-        const bool showHints = W - 2 * pad > hintW + dpi(app, 220);
+        const bool showHints = !inlineEdit && W - 2 * pad > hintW + dpi(app, 220);
         if (showHints) {
             text(app, fm.right, hints, W - pad - hintW, bodyBottom, hintW, ftrH,
                  withAlpha(th.text, 0.42f));
@@ -1429,8 +1510,9 @@ void renderHome(App& app) {
         const float infoW =
             W - 2 * pad - (showHints ? hintW + dpi(app, 24) : 0.0f);
         text(app, fm.caption, info, pad, bodyBottom, std::max(0.0f, infoW), ftrH,
-             withAlpha(th.text, 0.68f));
+             infoColor);
     }
-    renderHomeDialog(app, H, fm, W, top, bottom);
+    if (H.dialog == HomeDialogKind::ConfirmDelete)
+        renderHomeDialog(app, H, fm, W, top, bottom);
     fm.release();
 }

@@ -159,8 +159,8 @@ stateDiagram-v2
 | `Home.Files` | `RepoPicker` | — | `Home.Picker` | 记住 lastDir |
 | `Home.Files` | `OpenDir` | 目录可读 | `Home.Files` | 压入新列 |
 | `Home.Files` | `OpenFile` | 文件存在且受支持 | `Document.Read` | 打开/激活 tab |
-| `Home.Files` | `NewEntry` | — | `Home.Files` | 命名 → 写盘 → 刷新 |
-| `Home.Files` | `RenameEntry` | 有选中项 | `Home.Files` | 输入 → 校验 → 重命名 → 刷新 |
+| `Home.Files` | `NewEntry` | — | `Home.Files` | 列表顶部临时行内联命名 → 写盘 → 刷新 |
+| `Home.Files` | `RenameEntry` | 有选中项 | `Home.Files` | 原行内联编辑 → 校验 → 重命名 → 刷新 |
 | `Home.Files` | `DeleteEntry` | 有选中项 | `Home.Files` | 确认 → 回收站 → 刷新 |
 | `Home.Files` | `QuickJump` | 索引可用/可构建 | Overlay=QuickJump | 打开浮层 |
 | `Document.Read` | `EditDocument` | 有文件 | `Document.Edit` | 读源码 |
@@ -208,7 +208,7 @@ P1b 已实现 `NewEntry` / `RenameEntry` / `DeleteEntry` 的 Home 模态：校�
 | 设置写失败 | 设置页/首页底部红字 + 路径 | `[现状]` 部分路径静默 |
 | 文件夹选择框取消 | 无提示，保持原状态 | `[现状]` |
 | 文件夹选择框系统错误 | 显示错误码/错误信息 | `[提案]` |
-| 新建/重命名失败 | 行内错误或底部提示，保持原状态 | `[提案]` |
+| 新建/重命名失败 | 内联编辑不退出，错误显示在底部状态栏 | `[已验证]` |
 | 删除失败 | 确认框内/底部错误，不刷新成“已删除” | `[提案]` |
 | 索引扫描中 | QuickJump 显示“正在索引”，Esc 可关闭；已有缓存结果继续可用 | `[已验证]` |
 | 索引失败 | QuickJump 显示错误码 + 路径，F5 重试 | `[已验证]` |

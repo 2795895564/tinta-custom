@@ -40,6 +40,7 @@
 | D11 | P2b `Ctrl+K` 浮层 | `[已验证]` | 固定 `Ctrl+K`；Enter 在当前窗口打开/激活标签（不新开窗口），Esc 关闭并回原 Base；后台扫描带 generation，过期结果丢弃；文件夹结果跳 Home | `tests/quickjump_tests.cpp`；`tests/validate_quickjump.ps1` 19/19 |
 | D12 | P3 仓库重定位与启动仓库 | `[已验证]` | Picker 选中 `folder missing` 行按 `r` 重定位；按 `d` 把选中仓库设为启动仓库；保留 id/name，重复路径和缺失仓库拒绝 | `home_logic_tests`；用户手工重定位通过；默认仓库写入 settings 并显示 default 标记 |
 | D13 | P3 移除仓库二次确认 | `[已验证]` | `x`/Delete 第一次只提示，同一行再按一次才遗忘；移动/打开/点击会取消确认 | `home_logic_tests` 覆盖首次 arm 与二次 remove |
+| D14 | Home 内联新建/重命名 | `[已验证]` | 新建文件/文件夹在列表顶部显示临时行；重命名在行内编辑；Enter 提交、Esc 取消；删除仍用确认框 | 探针验证新建/重命名/取消；`out/inline/*.png` |
 
 ## C. 提案 / 待决定
 
@@ -81,6 +82,7 @@
 | V15 | P3 仓库重新定位 | `[已验证]` | 缺失仓库 → Picker → `r` → 选择新目录 → Home 直接打开新路径；重复路径拒绝 | 用户手工验收通过；`home_logic_tests`；`out/repo-relocate/*.png` |
 | V16 | P3 启动仓库 | `[已验证]` | Picker 按 `d` → currentRepoId=选中、startupMode=last、settings 落盘、行尾显示 default；缺失行拒绝 | 探针读取 settings：`repoCurrent=r1`、`startupMode=0`；`out/repo-default/*.png` |
 | V17 | P3 移除仓库二次确认 | `[已验证]` | `x` 第一次提示 “Press X again…”，第二次才 forget；不改磁盘文件夹 | `home_logic_tests` 通过 |
+| V18 | Home 内联编辑 | `[已验证]` | 新建临时行、原地重命名、Enter/Esc、错误底部提示、取消不落盘 | `out/inline/01-03*.png`；探针检查文件系统结果 |
 
 ## F. 环境限制
 
@@ -104,3 +106,4 @@
 - 2026-10-20：P3 开始——缺失仓库重新定位。Picker 的 `folder missing` 行按 `R` 打开目录选择框，更新 path/lastDir/currentRepoId 并保留 id/name；重复路径红字拒绝。`home_logic_tests` 通过；手工选目录验收待做。
 - 2026-10-20：P3 完成——Picker 按 `d` 设为启动仓库（currentRepoId + startupMode=last），行尾显示 `default`；缺失仓库拒绝。`home_logic_tests` 通过；探针确认 settings 与默认标记。用户已手工验收重定位。
 - 2026-10-20：P3 收尾——`x`/Delete 移除仓库改为二次确认，首次只提示且移动/打开/点击会取消；`home_logic_tests` 通过。
+- 2026-10-20：Home 新建/重命名改为内联编辑：新建在列表顶部显示临时行，重命名在行内替换名字；Enter 提交、Esc 取消，错误显示在底部；删除仍保留确认框。探针验证新建/重命名/取消与磁盘结果。
