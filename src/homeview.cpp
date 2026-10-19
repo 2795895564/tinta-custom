@@ -244,6 +244,7 @@ void relocateRepo(App& app, HWND hwnd, const std::string& id) {
 // (dialogs, settings, scans, opening a file), then repaint
 void pasteClipboard(App& app, HWND hwnd, bool overwrite);
 void preparePaste(App& app, HWND hwnd);
+void undoLastTransfer(App& app, HWND hwnd);
 
 void settle(App& app, HWND hwnd) {
     HomeState& H = app.home;
@@ -292,6 +293,10 @@ void settle(App& app, HWND hwnd) {
     if (H.pendingPaste) {
         H.pendingPaste = false;
         preparePaste(app, hwnd);
+    }
+    if (H.pendingUndo) {
+        H.pendingUndo = false;
+        undoLastTransfer(app, hwnd);
     }
     dispatchScans(app, hwnd);
     if (!H.pendingOpen.empty()) {
@@ -352,6 +357,8 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     if (H.clipboard.empty() || H.dir.empty()) return;
     const std::wstring dir = H.dir;
     std::vector<std::wstring> remaining;
+    std::vector<HomeTransfer> completed;
+    bool overwrote = false;
     unsigned pasted = 0, skipped = 0, failed = 0;
     for (const auto& source : H.clipboard) {
         std::wstring target = dirmodel::join(dir, dirmodel::leafOf(source));
@@ -368,6 +375,7 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
                 if (H.clipboardCut) remaining.push_back(source);
                 continue;
             }
+            overwrote = true;  // replacing an existing file is not undoable
             bool ok = false;
             if (H.clipboardCut) {
                 ok = MoveFileExW(source.c_str(), target.c_str(),
@@ -381,6 +389,7 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
                 remaining.push_back(source);
             } else {
                 pasted++;
+                completed.push_back({source, target});
             }
             continue;
         }
@@ -389,7 +398,14 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
             remaining.push_back(source);
         } else {
             pasted++;
+            completed.push_back({source, target});
         }
+    }
+    if (pasted && !overwrote) {
+        H.undoTransfers = std::move(completed);
+        H.undoIsMove = H.clipboardCut;
+    } else if (overwrote) {
+        H.undoTransfers.clear();
     }
     if (H.clipboardCut) H.clipboard = std::move(remaining);
     if (pasted) {
@@ -400,6 +416,47 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     wchar_t message[256];
     swprintf_s(message, _countof(message), tr(app, "home.paste_result"),
                pasted, skipped, failed);
+    H.fileNotice = message;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// Ctrl+Z: put the last moved items back, or recycle the last copied items.
+// Overwriting pastes are deliberately not undoable (the old bytes are gone).
+void undoLastTransfer(App& app, HWND hwnd) {
+    HomeState& H = app.home;
+    if (H.undoTransfers.empty()) {
+        H.fileNotice = tr(app, "home.undo_none");
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+    const bool move = H.undoIsMove;
+    unsigned ok = 0, failed = 0;
+    for (const HomeTransfer& item : H.undoTransfers) {
+        if (move) {
+            if (!pathExists(item.target) || pathExists(item.source)) {
+                failed++;
+                continue;
+            }
+            if (MoveFileExW(item.target.c_str(), item.source.c_str(),
+                            MOVEFILE_COPY_ALLOWED)) {
+                ok++;
+            } else {
+                failed++;
+            }
+        } else {
+            if (!pathExists(item.target)) {
+                failed++;
+                continue;
+            }
+            if (recyclePath(item.target)) failed++;
+            else ok++;
+        }
+    }
+    H.undoTransfers.clear();
+    homeNavigate(H, H.dir, L"");
+    wchar_t message[256];
+    swprintf_s(message, _countof(message),
+               tr(app, move ? "home.undo_move" : "home.undo_copy"), ok, failed);
     H.fileNotice = message;
     InvalidateRect(hwnd, nullptr, FALSE);
 }

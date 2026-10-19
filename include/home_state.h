@@ -74,6 +74,11 @@ enum class HomeDialogKind {
 };
 enum class HomeDialogError { None, Empty, Invalid, Exists, Failed };
 
+struct HomeTransfer {
+    std::wstring source;
+    std::wstring target;
+};
+
 struct HomeState {
     std::wstring root;  // repo root: navigation never leaves it
     std::wstring dir;   // folder shown in the middle column
@@ -96,6 +101,10 @@ struct HomeState {
     bool pendingPaste = false;
     std::vector<std::wstring> pasteConflicts;
     int pasteConflictChoice = 0;  // 0 = skip, 1 = overwrite
+    // Last successful paste, so Ctrl+Z can put moves back or remove copies.
+    std::vector<HomeTransfer> undoTransfers;
+    bool undoIsMove = false;
+    bool pendingUndo = false;
 
     std::wstring query;
     bool searching = false;

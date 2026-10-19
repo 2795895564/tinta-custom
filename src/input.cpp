@@ -3735,7 +3735,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     // Without this, the reader's document-wide Ctrl+A wins and Home never
     // sees the select-all / clipboard command.
     if (ctrl && (wParam == 'A' || wParam == 'C' || wParam == 'X' ||
-                 wParam == 'V') &&
+                 wParam == 'V' || wParam == 'Z') &&
         homeActive(app) && app.home.screen == HomeScreen::Home &&
         app.home.dialog == HomeDialogKind::None && !app.home.searching &&
         !app.editMode && !app.showSearch && !app.confirmExitPending) {

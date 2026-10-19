@@ -127,6 +127,8 @@ bool validHomeName(const std::wstring& name) {
 }
 
 void beginDialog(HomeState& s, HomeDialogKind kind) {
+    // A rename/new/delete invalidates the paths recorded by the last paste.
+    s.undoTransfers.clear();
     s.dialog = kind;
     s.dialogCommit = false;
     s.dialogError = HomeDialogError::None;
@@ -433,6 +435,10 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
                       END = 0x23, HOME = 0x24, LEFT = 0x25, UP = 0x26, RIGHT = 0x27,
                       DOWN = 0x28, DEL = 0x2E, PERIOD = 0xBE, SLASH = 0xBF,
                       F2 = 0x71 };
+    if (ctrl && vk == 'Z' && !s.searching) {
+        s.pendingUndo = true;
+        return true;
+    }
     if (ctrl && vk == 'A' && !s.searching) {
         s.selected.clear();
         for (int idx : s.view) {

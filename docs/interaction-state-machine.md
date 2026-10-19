@@ -80,6 +80,7 @@ Modal > Overlay > Text > Base
 | `RepoPicker` | Workspace | `o` | 固定 | `[现状]` |
 | `ClipCopy` / `ClipCut` / `ClipPaste` | Home.Files | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | 固定 | `[已验证]` |
 | `DeleteSelection` | Home.Files | `D` / `Delete` | 固定 | `[已验证]` |
+| `UndoTransfer` | Home.Files | `Ctrl+Z` | 固定 | `[已验证]` |
 | `ResolvePasteConflicts` | Home.PasteConflicts | `Enter` / `O` / `Esc` | 固定 | `[已验证]` |
 | `RelocateRepo` | Home.Picker | `r` | 固定 | `[已验证]` |
 | `SetDefaultRepo` | Home.Picker | `d` | 固定 | `[已验证]` |
@@ -162,7 +163,8 @@ stateDiagram-v2
 | `Home.Files` | `RepoPicker` | — | `Home.Picker` | 记住 lastDir |
 | `Home.Files` | `OpenDir` | 目录可读 | `Home.Files` | 压入新列 |
 | `Home.Files` | `OpenFile` | 文件存在且受支持 | `Document.Read` | 打开/激活 tab |
-| `Home.Files` | `ClipPaste` | 剪贴板非空、无重名 | `Home.Files` | 复制/移动 → 刷新 |
+| `Home.Files` | `ClipPaste` | 剪贴板非空、无重名 | `Home.Files` | 复制/移动 → 记录撤销 → 刷新 |
+| `Home.Files` | `UndoTransfer` | 有上次粘贴 | `Home.Files` | 移动项移回；复制项送回收站 |
 | `Home.Files` | `ClipPaste` | 剪贴板非空、有重名 | `Home.PasteConflicts` | 紧凑卡片列出冲突，等待 Enter/O/Esc |
 | `Home.PasteConflicts` | `Skip` | — | `Home.Files` | 保留旧文件，只贴非冲突项 |
 | `Home.PasteConflicts` | `Overwrite` | — | `Home.Files` | 覆盖同名文件（仅文件） |

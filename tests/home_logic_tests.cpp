@@ -132,6 +132,10 @@ int main() {
     s.fileNotice = L"Pasted 2";
     homeKey(s, 'J', false, false);
     CHECK(s.fileNotice.empty());  // next command clears the old paste notice
+    s.undoTransfers = {{L"C:\\notes\\a.md", L"C:\\notes\\dest\\a.md"}};
+    CHECK(homeKey(s, 'Z', true, false) && s.pendingUndo);
+    s.pendingUndo = false;
+    s.undoTransfers.clear();
 
     // search typing is swallowed from shortcuts; '/' echo is dropped
     CHECK(homeKey(s, 0xBF, false, false) && s.searching);

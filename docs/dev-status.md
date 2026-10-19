@@ -44,6 +44,7 @@
 | D15 | Home 剪贴板模型 | `[已验证]` | `Ctrl+A` 选全列，`Ctrl+C/X` 复制/剪切选中项，`Ctrl+V` 粘贴到当前目录；同名默认跳过、不覆盖；移动文件夹禁止进入自身；粘贴结果只保留到下一条命令 | `home_logic_tests`；探针验证复制、剪切与冲突跳过；`out/clipboard/*.png` |
 | D16 | Home 多选删除 | `[已验证]` | `D`/`Delete` 对选中项生效；确认框显示 `Move N items…`；全部送回收站，成功/失败计数；无选择时仍删当前项 | `home_logic_tests`；探针删除 a/b、保留 c；`out/delete/*.png` |
 | D17 | 粘贴重名冲突提示 | `[已验证]` | `Ctrl+V` 发现重名时弹出紧凑卡片：标题 + 冲突文件（最多 4 个）+ 操作提示；Enter 跳过、O 覆盖、Esc 取消 | 探针：Enter 后 a 保持 OLD、b 贴入；O 后 a 变 NEW；`out/prompt/02-compact-popup.png` |
+| D18 | 移动/复制撤销 | `[已验证]` | 每次成功粘贴记录 source/target；`Ctrl+Z` 把移动项移回，或把复制项送回收站；覆盖粘贴不进入撤销栈；新/改名/删除会清空撤销 | 探针：移动 a 后 Ctrl+Z 源恢复；复制 b 后 Ctrl+Z 目标移除；`out/undo/*.png` |
 
 ## C. 提案 / 待决定
 
@@ -89,6 +90,7 @@
 | V19 | Home 剪贴板 | `[已验证]` | Ctrl+A 全选、Ctrl+C/X 复制/剪切、Ctrl+V 粘贴、同名跳过、剪切后源消失、粘贴提示在下一次按键时清除 | `out/clipboard/*.png`；探针检查磁盘文件；`home_logic_tests` 覆盖提示清除 |
 | V20 | Home 多选删除 | `[已验证]` | 选中 2 项按 D → 确认 `Move 2 items…` → Enter 后两项进回收站，未选中项保留 | `out/delete/*.png`；探针检查文件系统；`home_logic_tests` 覆盖 dialogTargets |
 | V21 | 粘贴重名处理 | `[已验证]` | 430×200 紧凑卡片列出冲突与 Enter/O/Esc；Enter 跳过并粘贴其余，O 覆盖文件内容 | `out/prompt/02-compact-popup.png`；探针验证 OLD→NEW |
+| V22 | 移动/复制撤销 | `[已验证]` | Ctrl+Z 移动回源、复制项移除；失败计数；无操作时提示 Nothing to undo | `out/undo/02-undo-move.png`、`03-undo-copy.png`；探针检查磁盘 |
 
 ## F. 环境限制
 
@@ -117,3 +119,4 @@
 - 2026-10-20：修复粘贴提示滞留：`Pasted …` 只保留到下一次按键；之后复制/移动/选择会重新显示 `N copied` / `N selected`。
 - 2026-10-20：Home 多选删除：`D`/Delete 把 `dialogTargets` 填成选中项，确认框显示 `Move N items…`，批量送回收站并报告成功/失败；探针删除 a/b 后 c 保留。
 - 2026-10-20：粘贴重名提示重新设计为紧凑卡片（430×200）：标题、冲突文件（最多 4 个 +N）、Enter/O/Esc 提示，以及颜色区分的 Skip/Overwrite 按钮；去掉大块空白。
+- 2026-10-20：移动/复制撤销：成功粘贴记录 source/target；Ctrl+Z 移动项移回、复制项送回收站；覆盖粘贴和删除/改名后不可撤销；探针验证 a 移回、b 副本移除。

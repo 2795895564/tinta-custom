@@ -56,6 +56,21 @@ The probe created `a.md`, `b.md`, `c.md`, copied `a/b` into `dest/`, then cut
 - Failures are counted in the footer; the rest are still removed.
 - Screenshots: `out/delete/01-selected.png`, `out/delete/02-confirm.png`.
 
+## Undo
+
+`Ctrl+Z` after a successful paste:
+
+- Move: each moved item is moved back from target to source. If the source
+  path exists again, that item fails rather than being overwritten.
+- Copy: each copied target is sent to the Recycle Bin; the source stays.
+- Overwriting pastes are not undoable (the previous bytes are gone).
+- New/rename/delete clear the undo journal.
+- No journal: footer says `Nothing to undo`.
+
+Probe (`out/undo/`): moving `a.md` to `dest/` then Ctrl+Z restored
+`repo/a.md`; copying `b.md` then Ctrl+Z removed `dest/b.md` while `repo/b.md`
+stayed.
+
 ## Overwrite probe
 
 `out/prompt/`:
