@@ -388,7 +388,31 @@ void homeCommitDialog(App& app, HWND hwnd) {
     };
 
     if (H.dialog == HomeDialogKind::ConfirmDelete) {
-        DWORD code = recyclePath(dirmodel::join(dir, H.dialogOriginal));
+        if (H.dialogTargets.size() > 1) {
+            unsigned deleted = 0, failed = 0;
+            for (const std::wstring& name : H.dialogTargets) {
+                DWORD code = recyclePath(dirmodel::join(dir, name));
+                if (code) failed++;
+                else deleted++;
+            }
+            homeDialogClose(H);
+            homeNavigate(H, dir, L"");
+            wchar_t message[256];
+            if (failed) {
+                swprintf_s(message, _countof(message),
+                           tr(app, "home.delete_partial"), deleted, failed);
+                H.repoNotice = message;
+            } else {
+                swprintf_s(message, _countof(message),
+                           tr(app, "home.delete_result"), deleted);
+                H.fileNotice = message;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
+        const std::wstring target =
+            H.dialogTargets.empty() ? H.dialogOriginal : H.dialogTargets.front();
+        DWORD code = recyclePath(dirmodel::join(dir, target));
         if (code) {
             fail(HomeDialogError::Failed, code);
             return;
@@ -1154,8 +1178,12 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
 
     if (confirm) {
         wchar_t message[512];
-        swprintf_s(message, _countof(message), tr(app, "home.delete_confirm"),
-                   H.dialogOriginal.c_str());
+        if (H.dialogTargets.size() > 1)
+            swprintf_s(message, _countof(message), tr(app, "home.delete_confirm_many"),
+                       (unsigned)H.dialogTargets.size());
+        else
+            swprintf_s(message, _countof(message), tr(app, "home.delete_confirm"),
+                       H.dialogOriginal.c_str());
         text(app, fm.body, message, cardX + pad, cardY + dpi(app, 52),
              cardW - 2 * pad, dpi(app, 62), withAlpha(th.text, 0.78f));
         H.dialogFieldHit = HomeRect{};

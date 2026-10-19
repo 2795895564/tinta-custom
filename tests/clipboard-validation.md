@@ -44,8 +44,15 @@ The footer shows `N selected` and `N copied` / `N cut`.
 The probe created `a.md`, `b.md`, `c.md`, copied `a/b` into `dest/`, then cut
 `c.md` into `dest/` and verified the disk state.
 
+## Multi-delete
+
+- Select two rows with `Space`, press `D`/`Delete`.
+- The confirmation card says `Move 2 items to the Recycle Bin?`.
+- Enter deletes both; an unselected file remains.
+- Failures are counted in the footer; the rest are still removed.
+- Screenshots: `out/delete/01-selected.png`, `out/delete/02-confirm.png`.
+
 ## Remaining
 
-- Multi-selection delete still uses the single-item confirmation.
 - Overwrite / rename-on-conflict is not offered; conflicts are skipped.
 - OS clipboard (`CF_HDROP`) interop is not wired yet.

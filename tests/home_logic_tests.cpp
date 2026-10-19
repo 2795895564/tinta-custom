@@ -170,6 +170,12 @@ int main() {
     CHECK(homeKey(d, 'D', false, false) && d.dialog == HomeDialogKind::ConfirmDelete);
     CHECK(homeKey(d, 0x0D, false, false) && d.dialogCommit);
     homeDialogClose(d);
+    // Multi-select delete: the confirm dialog carries every marked name.
+    CHECK(homeKey(d, 'A', true, false) && homeSelectionCount(d) == 2);
+    CHECK(homeKey(d, 'D', false, false) && d.dialog == HomeDialogKind::ConfirmDelete &&
+          d.dialogTargets.size() == 2);
+    CHECK(homeKey(d, 0x1B, false, false) && d.dialog == HomeDialogKind::None);
+    d.selected.clear();
     CHECK(homeKey(d, 'N', false, false));
     for (wchar_t c : std::wstring(L"bad/name")) homeChar(d, c);
     CHECK(homeKey(d, 0x0D, false, false) && !d.dialogCommit &&

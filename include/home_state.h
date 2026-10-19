@@ -96,6 +96,7 @@ struct HomeState {
     HomeDialogKind dialog = HomeDialogKind::None;
     std::wstring dialogText;      // name being typed
     std::wstring dialogOriginal;  // rename/delete source name
+    std::vector<std::wstring> dialogTargets;  // delete selection
     std::wstring dialogParent;    // directory the operation applies to
     int dialogCaret = 0;
     HomeDialogError dialogError = HomeDialogError::None;

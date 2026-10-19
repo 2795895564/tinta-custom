@@ -133,16 +133,34 @@ void beginDialog(HomeState& s, HomeDialogKind kind) {
     s.dialogErrorCode = 0;
     s.dialogText.clear();
     s.dialogOriginal.clear();
+    s.dialogTargets.clear();
     s.dialogCaret = 0;
     s.dialogParent = s.dir;
-    if (kind == HomeDialogKind::Rename || kind == HomeDialogKind::ConfirmDelete) {
+    if (kind == HomeDialogKind::ConfirmDelete) {
+        if (!s.selected.empty()) {
+            for (int idx : s.view) {
+                if (idx < 0 || idx >= (int)s.current.entries.size()) continue;
+                const Entry& e = s.current.entries[idx];
+                if (s.selected.find(lower(e.name)) != s.selected.end())
+                    s.dialogTargets.push_back(e.name);
+            }
+        }
+        if (s.dialogTargets.empty()) {
+            if (const Entry* e = homeSelected(s)) s.dialogTargets.push_back(e->name);
+        }
+        if (s.dialogTargets.empty()) {
+            s.dialog = HomeDialogKind::None;
+            return;
+        }
+        s.dialogOriginal = s.dialogTargets.front();
+        return;
+    }
+    if (kind == HomeDialogKind::Rename) {
         const Entry* e = homeSelected(s);
         if (!e) { s.dialog = HomeDialogKind::None; return; }
         s.dialogOriginal = e->name;
-        if (kind == HomeDialogKind::Rename) {
-            s.dialogText = e->name;
-            s.dialogCaret = (int)e->name.size();
-        }
+        s.dialogText = e->name;
+        s.dialogCaret = (int)e->name.size();
     }
 }
 
@@ -207,6 +225,7 @@ void homeDialogClose(HomeState& s) {
     s.dialog = HomeDialogKind::None;
     s.dialogText.clear();
     s.dialogOriginal.clear();
+    s.dialogTargets.clear();
     s.dialogParent.clear();
     s.dialogCaret = 0;
     s.dialogError = HomeDialogError::None;

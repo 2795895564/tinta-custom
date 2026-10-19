@@ -79,6 +79,7 @@ Modal > Overlay > Text > Base
 | `QuickJump` | Global（Home/Document） | `Ctrl+K` | 第一期固定 | `[已验证]` |
 | `RepoPicker` | Workspace | `o` | 固定 | `[现状]` |
 | `ClipCopy` / `ClipCut` / `ClipPaste` | Home.Files | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | 固定 | `[已验证]` |
+| `DeleteSelection` | Home.Files | `D` / `Delete` | 固定 | `[已验证]` |
 | `RelocateRepo` | Home.Picker | `r` | 固定 | `[已验证]` |
 | `SetDefaultRepo` | Home.Picker | `d` | 固定 | `[已验证]` |
 | `ForgetRepo` | Home.Picker | `x` / `Delete` ×2 | 固定 | `[已验证]` |
@@ -161,6 +162,7 @@ stateDiagram-v2
 | `Home.Files` | `OpenDir` | 目录可读 | `Home.Files` | 压入新列 |
 | `Home.Files` | `OpenFile` | 文件存在且受支持 | `Document.Read` | 打开/激活 tab |
 | `Home.Files` | `ClipPaste` | 剪贴板非空 | `Home.Files` | 复制/移动 → 同名跳过 → 刷新 |
+| `Home.Files` | `DeleteSelection` | 有选中项 | `Home.Files` | 确认 `Move N items…` → 回收站 → 刷新 |
 | `Home.Files` | `NewEntry` | — | `Home.Files` | 列表顶部临时行内联命名 → 写盘 → 刷新 |
 | `Home.Files` | `RenameEntry` | 有选中项 | `Home.Files` | 原行内联编辑 → 校验 → 重命名 → 刷新 |
 | `Home.Files` | `DeleteEntry` | 有选中项 | `Home.Files` | 确认 → 回收站 → 刷新 |
