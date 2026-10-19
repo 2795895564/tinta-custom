@@ -43,7 +43,7 @@
 | D14 | Home 内联新建/重命名 | `[已验证]` | 新建文件/文件夹在列表顶部显示临时行；重命名在行内编辑；Enter 提交、Esc 取消；删除仍用确认框 | 探针验证新建/重命名/取消；`out/inline/*.png` |
 | D15 | Home 剪贴板模型 | `[已验证]` | `Ctrl+A` 选全列，`Ctrl+C/X` 复制/剪切选中项，`Ctrl+V` 粘贴到当前目录；同名默认跳过、不覆盖；移动文件夹禁止进入自身；粘贴结果只保留到下一条命令 | `home_logic_tests`；探针验证复制、剪切与冲突跳过；`out/clipboard/*.png` |
 | D16 | Home 多选删除 | `[已验证]` | `D`/`Delete` 对选中项生效；确认框显示 `Move N items…`；全部送回收站，成功/失败计数；无选择时仍删当前项 | `home_logic_tests`；探针删除 a/b、保留 c；`out/delete/*.png` |
-| D17 | 粘贴重名冲突提示 | `[已验证]` | `Ctrl+V` 发现重名时不弹大窗；底部文字列出冲突文件与操作提示；Enter 跳过、O 覆盖、Esc 取消；Skip 保留旧文件只贴其余 | 探针：Enter 后 a 保持 OLD、b 贴入；O 后 a 变 NEW；`out/prompt/*.png` |
+| D17 | 粘贴重名冲突提示 | `[已验证]` | `Ctrl+V` 发现重名时弹出紧凑卡片：标题 + 冲突文件（最多 4 个）+ 操作提示；Enter 跳过、O 覆盖、Esc 取消 | 探针：Enter 后 a 保持 OLD、b 贴入；O 后 a 变 NEW；`out/prompt/02-compact-popup.png` |
 
 ## C. 提案 / 待决定
 
@@ -88,7 +88,7 @@
 | V18 | Home 内联编辑 | `[已验证]` | 新建临时行、原地重命名、Enter/Esc、错误底部提示、取消不落盘 | `out/inline/01-03*.png`；探针检查文件系统结果 |
 | V19 | Home 剪贴板 | `[已验证]` | Ctrl+A 全选、Ctrl+C/X 复制/剪切、Ctrl+V 粘贴、同名跳过、剪切后源消失、粘贴提示在下一次按键时清除 | `out/clipboard/*.png`；探针检查磁盘文件；`home_logic_tests` 覆盖提示清除 |
 | V20 | Home 多选删除 | `[已验证]` | 选中 2 项按 D → 确认 `Move 2 items…` → Enter 后两项进回收站，未选中项保留 | `out/delete/*.png`；探针检查文件系统；`home_logic_tests` 覆盖 dialogTargets |
-| V21 | 粘贴重名处理 | `[已验证]` | 底部一行文字列出冲突与 Enter/O/Esc；无弹窗；Enter 跳过并粘贴其余，O 覆盖文件内容 | `out/prompt/01-prompt.png`；探针验证 OLD→NEW |
+| V21 | 粘贴重名处理 | `[已验证]` | 430×200 紧凑卡片列出冲突与 Enter/O/Esc；Enter 跳过并粘贴其余，O 覆盖文件内容 | `out/prompt/02-compact-popup.png`；探针验证 OLD→NEW |
 
 ## F. 环境限制
 
@@ -116,4 +116,4 @@
 - 2026-10-20：Home 剪贴板模型：Ctrl+A 全选、Ctrl+C/X 复制/剪切、Ctrl+V 粘贴；同名跳过不覆盖，剪切成功后清空剪贴板，跨目录/文件夹由 SHFileOperation 处理。探针验证复制 2 个文件、剪切 1 个文件。
 - 2026-10-20：修复粘贴提示滞留：`Pasted …` 只保留到下一次按键；之后复制/移动/选择会重新显示 `N copied` / `N selected`。
 - 2026-10-20：Home 多选删除：`D`/Delete 把 `dialogTargets` 填成选中项，确认框显示 `Move N items…`，批量送回收站并报告成功/失败；探针删除 a/b 后 c 保留。
-- 2026-10-20：粘贴重名提示改为底部文字：列出前 3 个冲突文件与 Enter/O/Esc；不弹大窗。Enter 跳过并粘贴其余，O 覆盖同名文件，Esc 取消。
+- 2026-10-20：粘贴重名提示重新设计为紧凑卡片（430×200）：标题、冲突文件（最多 4 个 +N）、Enter/O/Esc 提示，以及颜色区分的 Skip/Overwrite 按钮；去掉大块空白。

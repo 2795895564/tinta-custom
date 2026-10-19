@@ -163,7 +163,7 @@ stateDiagram-v2
 | `Home.Files` | `OpenDir` | 目录可读 | `Home.Files` | 压入新列 |
 | `Home.Files` | `OpenFile` | 文件存在且受支持 | `Document.Read` | 打开/激活 tab |
 | `Home.Files` | `ClipPaste` | 剪贴板非空、无重名 | `Home.Files` | 复制/移动 → 刷新 |
-| `Home.Files` | `ClipPaste` | 剪贴板非空、有重名 | `Home.PasteConflicts` | 底部文字提示，等待 Enter/O/Esc |
+| `Home.Files` | `ClipPaste` | 剪贴板非空、有重名 | `Home.PasteConflicts` | 紧凑卡片列出冲突，等待 Enter/O/Esc |
 | `Home.PasteConflicts` | `Skip` | — | `Home.Files` | 保留旧文件，只贴非冲突项 |
 | `Home.PasteConflicts` | `Overwrite` | — | `Home.Files` | 覆盖同名文件（仅文件） |
 | `Home.Files` | `DeleteSelection` | 有选中项 | `Home.Files` | 确认 `Move N items…` → 回收站 → 刷新 |

@@ -1238,9 +1238,10 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     const bool confirm = H.dialog == HomeDialogKind::ConfirmDelete;
     const bool pasteConflict =
         H.dialog == HomeDialogKind::ConfirmPasteConflicts;
-    const float cardW = std::min(dpi(app, 460), W - dpi(app, 56));
+    const float cardW = std::min(dpi(app, pasteConflict ? 430.0f : 460.0f),
+                                 W - dpi(app, 56));
     const float cardH =
-        dpi(app, pasteConflict ? 340.0f : confirm ? 186.0f : 224.0f);
+        dpi(app, pasteConflict ? 200.0f : confirm ? 186.0f : 224.0f);
     const float cardX = (W - cardW) / 2.0f;
     const float cardY = top + std::max(dpi(app, 24), (bottom - top - cardH) / 2.0f);
     const float pad = dpi(app, 20);
@@ -1271,26 +1272,22 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
                                 buttonsY + dpi(app, 30)};
 
     if (pasteConflict) {
-        const float listTop = cardY + dpi(app, 50);
-        const float lineH = dpi(app, 20);
-        const int maxLines = 8;
-        const int shown = std::min(maxLines, (int)H.pasteConflicts.size());
+        std::wstring names;
+        const int shown = std::min(4, (int)H.pasteConflicts.size());
         for (int i = 0; i < shown; i++) {
-            text(app, fm.mono, H.pasteConflicts[i], cardX + pad + dpi(app, 10),
-                 listTop + lineH * i, cardW - 2 * pad - dpi(app, 20), lineH,
-                 th.text);
+            if (i) names += L" \u00B7 ";
+            names += H.pasteConflicts[i];
         }
-        if ((int)H.pasteConflicts.size() > shown) {
-            wchar_t more[64];
-            swprintf_s(more, _countof(more), tr(app, "home.paste_conflict_more"),
-                       (unsigned)(H.pasteConflicts.size() - shown));
-            text(app, fm.caption, more, cardX + pad + dpi(app, 10),
-                 listTop + lineH * shown, cardW - 2 * pad, lineH,
-                 withAlpha(th.text, 0.55f));
-        }
-        text(app, fm.caption, tr(app, "home.paste_conflict_hint"), cardX + pad,
-             buttonsY - dpi(app, 30), cardW - 2 * pad, dpi(app, 24),
-             withAlpha(th.text, 0.52f));
+        if ((int)H.pasteConflicts.size() > shown)
+            names += L"  +" + std::to_wstring(H.pasteConflicts.size() - shown);
+        wchar_t lead[512];
+        swprintf_s(lead, _countof(lead), tr(app, "home.paste_conflict_lead"),
+                   (unsigned)H.pasteConflicts.size(), names.c_str());
+        text(app, fm.body, lead, cardX + pad, cardY + dpi(app, 48),
+             cardW - 2 * pad, dpi(app, 46), withAlpha(th.text, 0.80f));
+        text(app, fm.caption, tr(app, "home.paste_conflict_keys"),
+             cardX + pad, cardY + dpi(app, 98), cardW - 2 * pad, dpi(app, 20),
+             withAlpha(th.text, 0.45f));
         H.dialogFieldHit = HomeRect{};
     } else if (confirm) {
         wchar_t message[512];
@@ -1394,7 +1391,8 @@ void renderHome(App& app) {
     HomeState& H = app.home;
     H.rowHits.clear();
     H.columnHits.clear();
-    if (H.dialog != HomeDialogKind::ConfirmDelete) {
+    if (H.dialog != HomeDialogKind::ConfirmDelete &&
+        H.dialog != HomeDialogKind::ConfirmPasteConflicts) {
         H.dialogPrimaryHit = HomeRect{};
         H.dialogCancelHit = HomeRect{};
     }
@@ -1680,22 +1678,7 @@ void renderHome(App& app) {
     // Footer: selected item on the left, key hints on the right.
     fill(app, 0, bodyBottom, W, bottom, mix(th.background, th.text, th.isDark ? 0.05f : -0.04f));
     fill(app, 0, bodyBottom, W, bodyBottom + 1, line);
-    if (H.dialog == HomeDialogKind::ConfirmPasteConflicts) {
-        std::wstring names;
-        const int shown = std::min(3, (int)H.pasteConflicts.size());
-        for (int i = 0; i < shown; i++) {
-            if (i) names += L", ";
-            names += H.pasteConflicts[i];
-        }
-        if ((int)H.pasteConflicts.size() > shown)
-            names += L" +" + std::to_wstring(H.pasteConflicts.size() - shown);
-        wchar_t prompt[512];
-        swprintf_s(prompt, _countof(prompt),
-                   tr(app, "home.paste_conflict_prompt"),
-                   (unsigned)H.pasteConflicts.size(), names.c_str());
-        text(app, fm.caption, prompt, pad, bodyBottom, W - 2 * pad, ftrH,
-             D2D1::ColorF(0.86f, 0.46f, 0.42f));
-    } else if (!H.repoNotice.empty()) {
+    if (!H.repoNotice.empty()) {
         text(app, fm.caption, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else if (!H.fileNotice.empty()) {
@@ -1763,7 +1746,8 @@ void renderHome(App& app) {
         text(app, fm.caption, info, pad, bodyBottom, std::max(0.0f, infoW), ftrH,
              infoColor);
     }
-    if (H.dialog == HomeDialogKind::ConfirmDelete)
+    if (H.dialog == HomeDialogKind::ConfirmDelete ||
+        H.dialog == HomeDialogKind::ConfirmPasteConflicts)
         renderHomeDialog(app, H, fm, W, top, bottom);
     fm.release();
 }

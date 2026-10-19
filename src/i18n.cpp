@@ -397,6 +397,8 @@ const Entry kEntries[] = {
     { "home.paste_result", L"Pasted %u  ·  skipped %u  ·  failed %u", L"粘贴 %u  ·  跳过 %u  ·  失败 %u", L"貼り付け %u  ·  スキップ %u  ·  失敗 %u", L"붙여넣기 %u  ·  건너뜀 %u  ·  실패 %u" },
     { "home.paste_conflict_title", L"Name conflicts", L"文件名冲突", L"名前の衝突", L"이름 충돌" },
     { "home.paste_conflict_prompt", L"%u file(s) already exist: %s   Enter: skip   O: overwrite   Esc: cancel", L"%u 个文件已存在：%s   Enter 跳过   O 覆盖   Esc 取消", L"%u 件のファイルが既にあります：%s   Enter スキップ   O 上書き   Esc キャンセル", L"%u개 파일이 이미 있습니다: %s   Enter 건너뛰기   O 덮어쓰기   Esc 취소" },
+    { "home.paste_conflict_lead", L"%u file(s) already exist in this folder: %s", L"%u 个文件已存在于当前文件夹：%s", L"%u 件のファイルがこのフォルダーに既にあります：%s", L"%u개 파일이 이 폴더에 이미 있습니다: %s" },
+    { "home.paste_conflict_keys", L"Enter: skip   O: overwrite   Esc: cancel", L"Enter：跳过   O：覆盖   Esc：取消", L"Enter: スキップ   O: 上書き   Esc: キャンセル", L"Enter: 건너뛰기   O: 덮어쓰기   Esc: 취소" },
     { "home.paste_conflict_hint", L"Skip keeps the existing files; Overwrite replaces them. Enter confirms, Esc cancels.", L"“跳过”保留现有文件，“覆盖”替换它们。Enter 确认，Esc 取消。", L"スキップは既存ファイルを残し、上書きは置き換えます。Enter で確定、Esc でキャンセル。", L"건너뛰기는 기존 파일을 유지하고 덮어쓰기는 교체합니다. Enter 확인, Esc 취소." },
     { "home.paste_skip", L"Skip", L"跳过", L"スキップ", L"건너뛰기" },
     { "home.paste_overwrite", L"Overwrite", L"覆盖", L"上書き", L"덮어쓰기" },

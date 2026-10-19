@@ -26,11 +26,12 @@ The footer shows `N selected` and `N copied` / `N cut`.
    status returns.
 4. Press `Ctrl+X` on `c.md`, go to `dest/`, press `Ctrl+V`. `c.md` disappears
    from the source and appears in `dest/`; the clipboard clears.
-5. Paste with an existing name. The footer shows one line:
-   `1 file(s) already exist: a.md   Enter: skip   O: overwrite   Esc: cancel`.
-   There is no large dialog.
+5. Paste with an existing name. A compact card (430×200) shows
+   `Name conflicts`, the colliding names, and
+   `Enter: skip   O: overwrite   Esc: cancel`.
 6. Enter keeps the old files and pastes the rest; O replaces same-named files;
-   Esc cancels without pasting.
+   Esc cancels without pasting. The Skip button is neutral, Overwrite is red,
+   and the selected one has a clear focus ring.
 7. Try to copy/move a folder into itself or a descendant. It is skipped.
 8. Ctrl+C/X/V in the editor still operate on text; the file clipboard only
    responds when Home's file list is the active surface.
@@ -59,7 +60,7 @@ The probe created `a.md`, `b.md`, `c.md`, copied `a/b` into `dest/`, then cut
 
 `out/prompt/`:
 
-- `01-prompt.png` — footer prompt listing `a.md` with Enter/O/Esc
+- `02-compact-popup.png` — compact conflict card listing `a.md`/`b.md`
 - Enter kept `dest/a.md` as `OLD`; O changed it to `NEW`
 
 Folder merging on overwrite is intentionally not offered; conflicting folders
