@@ -61,6 +61,14 @@ Screenshots live in `out/polish/`.
 - Error notices (`repoNotice`) still stay until the next state change.
 - Screenshots: `out/notice/01-notice.png`, `02-cleared.png`.
 
+## File-type badges
+
+- Selected rows lift their leading badge: `MD` becomes a solid accent chip with
+  inverted text; `IMG`/`TXT` become dark chips with inverted text.
+- Unselected rows keep the pale badge so selected rows still read first.
+- Folder chevrons switch to the text colour on a selected row.
+- Screenshot: `out/badge/01-selected-badges.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the

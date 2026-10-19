@@ -1746,15 +1746,20 @@ void renderHome(App& app) {
             }
 
             // Folder chevron or file-type badge in a fixed leading slot.
+            const bool rowStrong = selected || multi;
             const float badgeX = x + pad;
             const float badgeY = y + (rowH - badgeH) / 2.0f;
             if (e.kind == Kind::Folder) {
-                text(app, fm.tag, L"\x25B8", badgeX, y, badgeW, rowH, th.accent);
+                text(app, fm.tag, L"\x25B8", badgeX, y, badgeW, rowH,
+                     rowStrong ? th.text : th.accent);
             } else {
+                const bool doc = e.kind == Kind::Document;
                 const D2D1_COLOR_F tagBg =
-                    withAlpha(e.kind == Kind::Document ? th.accent : th.text, 0.10f);
+                    rowStrong ? (doc ? th.accent : withAlpha(th.text, 0.30f))
+                              : withAlpha(doc ? th.accent : th.text, 0.10f);
                 const D2D1_COLOR_F tagFg =
-                    e.kind == Kind::Document ? th.accent : withAlpha(th.text, 0.55f);
+                    rowStrong ? th.background
+                              : (doc ? th.accent : withAlpha(th.text, 0.55f));
                 fillRound(app, badgeX, badgeY, badgeX + badgeW, badgeY + badgeH,
                           dpi(app, 3), tagBg);
                 text(app, fm.tag, fileTypeTag(e), badgeX, y, badgeW, rowH, tagFg);
@@ -1770,9 +1775,10 @@ void renderHome(App& app) {
             if (showMeta) {
                 // Name > modified > size: three brightness levels instead of
                 // one flat dim tone for all metadata.
-                const bool strong = selected || multi;
-                const D2D1_COLOR_F sizeC = withAlpha(th.text, strong ? 0.56f : 0.36f);
-                const D2D1_COLOR_F whenC = withAlpha(th.text, strong ? 0.66f : 0.48f);
+                const D2D1_COLOR_F sizeC =
+                    withAlpha(th.text, rowStrong ? 0.56f : 0.36f);
+                const D2D1_COLOR_F whenC =
+                    withAlpha(th.text, rowStrong ? 0.66f : 0.48f);
                 const float whenX = x + colW - rightPad - whenW;
                 const float sizeX = whenX - sizeW - dpi(app, 10);
                 if (e.kind != Kind::Folder)
