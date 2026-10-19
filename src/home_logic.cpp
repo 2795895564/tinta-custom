@@ -9,14 +9,14 @@ HomeColumnsLayout homeColumnsLayout(float viewWidth, int count, float pad, float
     HomeColumnsLayout out;
     if (count < 1) count = 1;
     const float avail = std::max(0.0f, viewWidth - 2.0f * pad);
-    // Single columns get room to breathe on wide windows (800 DIP, 58% of
-    // the window, never wider than 900); two and three columns keep the
-    // classic Miller rhythm. Every width is capped by the space that is
-    // actually there, so narrow windows fill edge to edge.
+    // Single columns get room to breathe on wide windows (72% of the window,
+    // 800–1200 DIP); two and three columns keep the classic Miller rhythm but
+    // widen a little on a full-screen desktop. Every width is capped by the
+    // space that is actually there, so narrow windows fill edge to edge.
     const float preferred =
-        count == 1 ? std::clamp(viewWidth * 0.58f, 800.0f, 900.0f)
-        : count == 2 ? 520.0f
-                     : 400.0f;
+        count == 1 ? std::clamp(viewWidth * 0.72f, 800.0f, 1200.0f)
+        : count == 2 ? 560.0f
+                     : 420.0f;
     const float fit = (avail - (count - 1) * gap) / (float)count;
     out.width = std::max(1.0f, std::min(preferred, fit));
     out.totalWidth = count * out.width + (count - 1) * gap;

@@ -42,18 +42,18 @@ int main() {
     ho.showOther = false; CHECK(visible(w, ho, L"").size() == 2);
     CHECK(formatSize(3174) == L"3.1 KB" && formatSize(512) == L"512 B" && formatSize(2 * 1024 * 1024) == L"2 MB");
 
-    // Miller-column geometry: a single column is 800-900 DIP wide, two are
-    // ~520, three ~400, the group is centered, and narrow windows fill up.
+    // Miller-column geometry: a single column is 800-1200 DIP wide, two are
+    // ~560, three ~420, the group is centered, and narrow windows fill up.
     {
         const float pad = 18, gap = 16;
         HomeColumnsLayout one = homeColumnsLayout(1200, 1, pad, gap);
-        CHECK(near(one.width, 800) && near(one.totalWidth, 800) && near(one.startX, 200));
+        CHECK(near(one.width, 864) && near(one.totalWidth, 864) && near(one.startX, 168));
         HomeColumnsLayout wide = homeColumnsLayout(1920, 1, pad, gap);
-        CHECK(near(wide.width, 900) && near(wide.startX, 510));  // capped at 900
+        CHECK(near(wide.width, 1200) && near(wide.startX, 360));  // capped at 1200
         HomeColumnsLayout two = homeColumnsLayout(1400, 2, pad, gap);
-        CHECK(near(two.width, 520) && near(two.totalWidth, 1056) && near(two.startX, 172));
+        CHECK(near(two.width, 560) && near(two.totalWidth, 1136) && near(two.startX, 132));
         HomeColumnsLayout three = homeColumnsLayout(1600, 3, pad, gap);
-        CHECK(near(three.width, 400) && near(three.totalWidth, 1232) && near(three.startX, 184));
+        CHECK(near(three.width, 420) && near(three.totalWidth, 1292) && near(three.startX, 154));
         HomeColumnsLayout tight = homeColumnsLayout(700, 1, pad, gap);
         CHECK(near(tight.width, 664) && near(tight.startX, 18) && tight.totalWidth <= 700);
         HomeColumnsLayout tight2 = homeColumnsLayout(900, 2, pad, gap);

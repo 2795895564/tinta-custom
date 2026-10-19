@@ -77,6 +77,15 @@ Screenshots live in `out/polish/`.
   parent is still readable.
 - Screenshot: `out/meta/01-columns.png`.
 
+## Full-screen widths
+
+- Tested maximized on a 2560×1540 work area, not just a 1024×768 window.
+- Single column: 1200 DIP cap, centered; much less empty side margin than before.
+- Two columns: 560 DIP each; three columns: 420 DIP each; group stays centered.
+- Narrow windows still clamp to the available width.
+- Screenshots: `out/full/01-full-root.png`, `02-full-two.png`,
+  `03-full-three.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the
