@@ -15,6 +15,16 @@
 
 struct HomeRect { float l = 0, t = 0, r = 0, b = 0; };
 
+// Responsive Miller-column geometry (in DIPs). Kept platform-free so the
+// 800/900 single-column rule, the 520/400 multi-column rules and the
+// "fill the window when it gets narrow" behaviour stay testable.
+struct HomeColumnsLayout {
+    float width = 0;       // width of every column
+    float totalWidth = 0;  // columns + gaps
+    float startX = 0;      // centered group
+};
+HomeColumnsLayout homeColumnsLayout(float viewWidth, int count, float pad, float gap);
+
 enum HomeSlot { kHomeParent = 0, kHomeCurrent = 1, kHomePreviewDir = 2, kHomePreviewFile = 3 };
 
 enum class HomeScreen { Home, Picker };
@@ -51,6 +61,11 @@ struct HomeColumnHit {
     int row = 0;
 };
 
+// One small modal for Home file operations. Name dialogs keep a caret and
+// validate Windows file-name rules; confirm-delete has no text field.
+enum class HomeDialogKind { None, NewFile, NewFolder, Rename, ConfirmDelete };
+enum class HomeDialogError { None, Empty, Invalid, Exists, Failed };
+
 struct HomeState {
     std::wstring root;  // repo root: navigation never leaves it
     std::wstring dir;   // folder shown in the middle column
@@ -68,6 +83,18 @@ struct HomeState {
     std::wstring query;
     bool searching = false;
     wchar_t swallow = 0;    // the char the '/' keydown is about to post
+
+    // Home file-operation modal (new file/folder, rename, delete confirm).
+    HomeDialogKind dialog = HomeDialogKind::None;
+    std::wstring dialogText;      // name being typed
+    std::wstring dialogOriginal;  // rename/delete source name
+    std::wstring dialogParent;    // directory the operation applies to
+    int dialogCaret = 0;
+    HomeDialogError dialogError = HomeDialogError::None;
+    unsigned long dialogErrorCode = 0;  // Win32/HRESULT detail for Failed
+    bool dialogCommit = false;    // shell executes, then clears
+    HomeRect dialogFieldHit, dialogPrimaryHit, dialogCancelHit;
+    float dialogCaretX = 0, dialogCaretY = 0;  // client-space IME anchor
 
     std::wstring restoreName;                       // select this when the listing lands
     std::map<std::wstring, std::wstring> lastPick;  // folder (lowercase) -> last selected name
@@ -138,6 +165,7 @@ void homeActivate(HomeState& s);
 void homeUp(HomeState& s);
 bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift);  // true = consumed
 bool homeChar(HomeState& s, wchar_t c);                          // true = consumed
+void homeDialogClose(HomeState& s);
 unsigned homeTakeRequests(HomeState& s);
 
 void homeSetRepoRows(HomeState& s, std::vector<RepoRow>&& rows);

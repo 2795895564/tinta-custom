@@ -864,6 +864,11 @@ static void settingsAction(App& app, HWND hwnd, int action) {
 
 void handleMouseWheel(App& app, HWND hwnd, WPARAM wParam, LPARAM) {
     tabHoverCardDismiss(app, hwnd);
+    if (app.quickJump.open) {
+        quickJumpWheel(app, hwnd,
+                       (float)GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA);
+        return;
+    }
     if (homeActive(app) && !app.showLightbox) {
         homeOnWheel(app, hwnd, (float)GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA);
         return;
@@ -1126,6 +1131,11 @@ void handleMouseMove(App& app, HWND hwnd, LPARAM lParam) {
     bool mouseMoved = app.mouseX != GET_X_LPARAM(lParam) || app.mouseY != GET_Y_LPARAM(lParam);
     app.mouseX = GET_X_LPARAM(lParam);
     app.mouseY = GET_Y_LPARAM(lParam);
+
+    if (app.quickJump.open) {
+        quickJumpMouseMove(app, hwnd, app.mouseX, app.mouseY);
+        return;
+    }
 
     if (app.showToc || app.showFolderBrowser) {
         TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, hwnd, 0};
@@ -1898,6 +1908,12 @@ void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
     // A fresh press is a new gesture, even if a cancelled drag released elsewhere.
     app.swallowNextMouseUp = false;
     tabHoverCardDismiss(app, hwnd);
+    // Quick Jump is an overlay: every press lands on its field, a result row,
+    // or the scrim that dismisses it.
+    if (app.quickJump.open &&
+        quickJumpMouseDown(app, hwnd, GET_X_LPARAM(lParam),
+                           GET_Y_LPARAM(lParam)))
+        return;
     // Settings owns the entire click, including the title strip behind it.
     // Sliders drag from the press; dismissal and other actions use release.
     if (app.showSettings) {
@@ -2485,13 +2501,19 @@ static void startPageInvoke(App& app, HWND hwnd, int id) {
     if (id == 1) {
         openFileDialog(app, hwnd);
     } else if (id == 2) {
-        // New document: the note takes over this window (#121 semantics);
-        // the keystroke's WM_CHAR must not type into the fresh editor
+        // New document: the note takes over a normal empty tab (#121
+        // semantics). The fixed Home tab keeps its workspace: a note from
+        // Home becomes a new quick-note tab instead of overwriting Home.
         app.swallowCharsUntil = std::chrono::steady_clock::now() +
                                 std::chrono::milliseconds(150);
         tabsInit(app);
-        enterQuickNoteMode(app);
-        app.tabs[app.activeTab].title = tr(app, "title.untitled");
+        if (app.activeTab >= 0 && app.activeTab < (int)app.tabs.size() &&
+            app.tabs[app.activeTab].home) {
+            tabOpenQuickNote(app, hwnd);
+        } else {
+            enterQuickNoteMode(app);
+            app.tabs[app.activeTab].title = tr(app, "title.untitled");
+        }
         updateWindowTitle(app);
     } else if (id == 3) {
         if (!app.showFolderBrowser) {
@@ -2528,13 +2550,17 @@ static void startPageInvoke(App& app, HWND hwnd, int id) {
                     app.startPageRecents.begin() + index);
                 app.startPageHover = 0;
             } else {
+                const bool keepHome = !app.home.root.empty();
+                if (keepHome) tabsEnsureHome(app);
                 tabsInit(app);
                 int shellId = app.tabs[app.activeTab].id;
                 tabOpenPath(app, hwnd, path);
-                for (int i = 0; i < (int)app.tabs.size(); i++) {
-                    if (app.tabs[i].id == shellId) {
-                        tabCloseIndex(app, hwnd, i);
-                        break;
+                if (!keepHome) {
+                    for (int i = 0; i < (int)app.tabs.size(); i++) {
+                        if (app.tabs[i].id == shellId) {
+                            tabCloseIndex(app, hwnd, i);
+                            break;
+                        }
                     }
                 }
             }
@@ -3540,6 +3566,11 @@ static void toggleZenMode(App& app, HWND hwnd) {
 bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     // Typing, scrolling and clicking all put the tab hover card away
     tabHoverCardDismiss(app, hwnd);
+    // The palette is an overlay above Home/Document. Command keys return true;
+    // printable keys return false so the message loop's TranslateMessage still
+    // produces the WM_CHAR that feeds the query field.
+    if (app.quickJump.open)
+        return quickJumpKeyDown(app, hwnd, wParam);
     // Ctrl+Alt+Up/Down add editor carets (#251) before the AltGr guard
     if (editorAltArrowKey(app, hwnd, wParam)) return true;
     if (!shortcutModifiersAllowed(static_cast<unsigned>(wParam))) return false;
@@ -3699,6 +3730,14 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return false;  // punctuation Help bindings still need WM_CHAR
+    }
+    // Ctrl+K opens the palette from Home, reading and editing. It is fixed
+    // (not in the remappable key table) and never steals a modal/overlay.
+    if (ctrl && wParam == 'K' && !app.confirmExitPending && !app.showSearch &&
+        !app.showTabSwitcher && !app.showTabMenu &&
+        app.home.dialog == HomeDialogKind::None) {
+        quickJumpOpen(app, hwnd);
+        return true;
     }
     if (appMenuAvailable(app)) {
         if (wParam == VK_F10) {
@@ -4064,9 +4103,15 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 } else if (app.zenMode) {
                     toggleZenMode(app, hwnd);
                 } else {
-                    // Through WM_CLOSE: unsaved tabs ask or become drafts
-                    // (#252), and the session is saved
-                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    // GoHome: a document returns to the fixed Home tab when
+                    // the window has one. Document-only windows keep the
+                    // bottom of the stack as a no-op. Quit is explicit:
+                    // Q, the window close button, or Alt+F4.
+                    for (int i = 0; i < (int)app.tabs.size(); i++) {
+                        if (!app.tabs[i].home) continue;
+                        tabActivate(app, hwnd, i);
+                        break;
+                    }
                 }
                 break;
             case VK_F11:
@@ -4235,6 +4280,10 @@ void handleCharInput(App& app, HWND hwnd, WPARAM wParam) {
     // The Enter that confirmed the create-reference dialog must not leak
     // a newline into the editor it just opened
     if (std::chrono::steady_clock::now() < app.swallowCharsUntil) return;
+    if (app.quickJump.open) {
+        quickJumpChar(app, hwnd, (wchar_t)wParam);
+        return;
+    }
     if (homeActive(app) && homeOnChar(app, hwnd, (wchar_t)wParam)) return;
 
     // Annotation note editor takes all typing (#126)

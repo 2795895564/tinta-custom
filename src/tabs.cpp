@@ -38,6 +38,24 @@ std::wstring titleForPath(App& app, const std::string& path) {
     return lastSep == std::wstring::npos ? wide : wide.substr(lastSep + 1);
 }
 
+App::DocTab makeHomeTab(App& app) {
+    App::DocTab tab;
+    tab.id = ++app.tabIdCounter;
+    tab.home = true;
+    tab.title = tr(app, "tab.home");
+    return tab;
+}
+
+// Keep the fixed Home tab at index 0 without disturbing the active document.
+void moveTabToFront(App& app, int index) {
+    if (index <= 0 || index >= (int)app.tabs.size()) return;
+    App::DocTab tab = std::move(app.tabs[index]);
+    app.tabs.erase(app.tabs.begin() + index);
+    app.tabs.insert(app.tabs.begin(), std::move(tab));
+    if (app.activeTab == index) app.activeTab = 0;
+    else if (app.activeTab >= 0 && app.activeTab < index) ++app.activeTab;
+}
+
 // Keep the active tab's bookkeeping in sync with the app state (path can
 // change when a quick note is saved; dirty drives the unsaved dot)
 void syncActiveTab(App& app) {
@@ -46,6 +64,14 @@ void syncActiveTab(App& app) {
         app.activeTab = 0;
     }
     App::DocTab& tab = app.tabs[app.activeTab];
+    if (tab.home) {
+        // The fixed Home tab never becomes a document tab.
+        tab.path.clear();
+        tab.title = tr(app, "tab.home");
+        tab.editMode = false;
+        tab.editorDirty = false;
+        return;
+    }
     tab.path = app.currentFile;
     // A pathless viewer tab with a custom title (an embedded Learn
     // document from the start page) keeps it; quick notes re-derive
@@ -106,6 +132,62 @@ void tabsInit(App& app) {
     app.activeTab = 0;
 }
 
+void tabsEnsureHome(App& app) {
+    tabsInit(app);
+    for (int i = 0; i < (int)app.tabs.size(); i++) {
+        if (!app.tabs[i].home) continue;
+        moveTabToFront(app, i);
+        return;
+    }
+    // Reuse an empty start-page tab if there is one: it is already the
+    // workspace's empty-document slot and has no document to lose.
+    for (int i = 0; i < (int)app.tabs.size(); i++) {
+        App::DocTab& tab = app.tabs[i];
+        if (!tab.path.empty() || tab.editMode || tab.editorDirty ||
+            app.startPageEmbeddedOpen) {
+            continue;
+        }
+        if (tab.id == 0) tab.id = ++app.tabIdCounter;
+        tab.home = true;
+        tab.title = tr(app, "tab.home");
+        tab.path.clear();
+        tab.editMode = false;
+        tab.editorDirty = false;
+        tab.editorText.clear();
+        moveTabToFront(app, i);
+        return;
+    }
+    app.tabs.insert(app.tabs.begin(), makeHomeTab(app));
+    if (app.activeTab >= 0) ++app.activeTab;
+}
+
+void tabsSeedWorkspace(App& app, const std::vector<std::string>& paths) {
+    app.tabs.clear();
+    app.activeTab = -1;
+    app.tabs.push_back(makeHomeTab(app));
+    for (const std::string& path : paths) {
+        if (path.empty()) continue;
+        bool duplicate = false;
+        for (const App::DocTab& tab : app.tabs) {
+            if (!tab.path.empty() && _stricmp(tab.path.c_str(), path.c_str()) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        App::DocTab tab;
+        tab.id = ++app.tabIdCounter;
+        tab.path = path;
+        tab.title = titleForPath(app, path);
+        app.tabs.push_back(std::move(tab));
+    }
+    app.activeTab = 0;
+    app.currentFile.clear();
+    app.startPageEmbeddedOpen = false;
+    app.showTabSwitcher = false;
+    app.tabFirstVisible = 0;
+}
+
 void tabsSeedSession(App& app, const std::vector<std::string>& paths) {
     // Rebuilds the tab row from a saved session, in order; the already
     // loaded startup document becomes the active tab (appended if it was
@@ -137,6 +219,8 @@ void tabActivate(App& app, HWND hwnd, int index) {
     tabsInit(app);
     if (index < 0 || index >= (int)app.tabs.size()) return;
     if (index == app.activeTab) return;
+    // Leaving Home abandons an unfinished file-operation modal.
+    if (app.home.dialog != HomeDialogKind::None) homeDialogClose(app.home);
 
     // Leaving an embedded Learn document: an empty tab activated later
     // shows the launcher again
@@ -164,8 +248,10 @@ void tabActivate(App& app, HWND hwnd, int index) {
         app.scrollX = app.targetScrollX = 0;
         app.layoutDirty = true;
         // An empty viewer tab in a launcher window shows the start page
-        // again; its label follows suit
-        if (!tab.editMode && startPageActive(app)) {
+        // again; its label follows suit. The fixed Home tab keeps its name.
+        if (tab.home) {
+            tab.title = tr(app, "tab.home");
+        } else if (!tab.editMode && startPageActive(app)) {
             tab.title = L"Tinta";
         }
     }
@@ -204,8 +290,11 @@ void tabOpenPath(App& app, HWND hwnd, const std::string& utf8Path,
     tab.id = ++app.tabIdCounter;
     tab.path = utf8Path;
     tab.title = titleForPath(app, utf8Path);
-    int index = insertBefore < 0 ? (int)app.tabs.size()
-                               : std::min(insertBefore, (int)app.tabs.size());
+    const int firstFile =
+        (!app.tabs.empty() && app.tabs[0].home) ? 1 : 0;
+    int index = insertBefore < 0
+                    ? (int)app.tabs.size()
+                    : std::clamp(insertBefore, firstFile, (int)app.tabs.size());
     app.tabs.insert(app.tabs.begin() + index, std::move(tab));
     // Keep the old active document attached to its tab until activation
     // parks its editor buffer; insertion may have shifted that tab right.
@@ -220,6 +309,7 @@ void tabOpenPath(App& app, HWND hwnd, const std::string& utf8Path,
 void tabCloseIndex(App& app, HWND hwnd, int index) {
     tabsInit(app);
     if (index < 0 || index >= (int)app.tabs.size()) return;
+    if (app.tabs[index].home) return;  // fixed workspace tab, never closed
     if (index==app.activeTab) tableEditCommit(app);
 
     // A dirty buffer routes through the unsaved-changes dialog (#106):
@@ -312,6 +402,12 @@ void tabBecomeStartPage(App& app, HWND hwnd) {
 // browser-style new-tab page with recents and open actions)
 void tabOpenStartPage(App& app, HWND hwnd) {
     tabsInit(app);
+    for (int i = 0; i < (int)app.tabs.size(); i++) {
+        if (!app.tabs[i].home) continue;
+        app.showTabSwitcher = false;
+        tabActivate(app, hwnd, i);
+        return;
+    }
     syncActiveTab(app);
     parkActiveEditBuffer(app);
     App::DocTab tab;
@@ -752,7 +848,8 @@ void renderTabStrip(App& app) {
                                 : (app.tabs[i].editMode &&
                                    app.tabs[i].editorDirty);
             bool missing = app.tabs[i].fileMissing && !app.tabs[i].path.empty();
-            bool showClose = (active || hovered) && m.tabWidth >= dpi(app, 48.0f);
+            bool showClose = !app.tabs[i].home && (active || hovered) &&
+                             m.tabWidth >= dpi(app, 48.0f);
             // Status dot: orange = unsaved changes, red-grey = the file
             // vanished from disk
             bool showDot = dirty || missing;
@@ -1433,6 +1530,8 @@ bool tabStripMouseDown(App& app, HWND hwnd, int x, int y, bool middle) {
             return true;
         }
         tabActivate(app, hwnd, hit.index);
+        // The fixed Home tab never detaches or reorders.
+        if (app.tabs[hit.index].home) return true;
         // Arm a potential drag: moving past the threshold starts
         // reordering, pulling away from the strip detaches the tab
         app.tabDragIndex = hit.index;
@@ -1513,13 +1612,21 @@ float tabMenuTotalHeight(const App& app) {
 bool tabMenuItemEnabled(const App& app, int item) {
     int index = app.tabMenuIndex;
     if (index < 0 || index >= (int)app.tabs.size()) return false;
+    const bool home = app.tabs[index].home;
+    const int firstFile = (!app.tabs.empty() && app.tabs[0].home) ? 1 : 0;
     switch (item) {
-        case TM_CLOSE:        return true;
-        case TM_CLOSE_OTHERS: return app.tabs.size() > 1;
-        case TM_CLOSE_LEFT:   return index > 0;
+        case TM_CLOSE:        return !home;
+        case TM_CLOSE_OTHERS: {
+            if (home) return app.tabs.size() > 1;  // keep Home, close files
+            int files = 0;
+            for (const App::DocTab& tab : app.tabs) if (!tab.home) files++;
+            return files > 1;
+        }
+        case TM_CLOSE_LEFT:   return !home && index > firstFile;
         case TM_CLOSE_RIGHT:  return index + 1 < (int)app.tabs.size();
         case TM_COPY_PATH:
         case TM_REVEAL:
+            if (home) return false;
             return !(index == app.activeTab ? app.currentFile : app.tabs[index].path).empty();
     }
     return false;
@@ -1551,11 +1658,17 @@ void tabBulkCloseStep(App& app, HWND hwnd) {
             return;
         }
         int victim = -1;
-        if (app.tabBulkCloseMode != 3 && keep > 0) {
-            victim = 0;  // everything left of the kept tab, one by one
-        } else if (app.tabBulkCloseMode != 2 &&
-                   keep + 1 < (int)app.tabs.size()) {
-            victim = keep + 1;  // everything to its right
+        // Everything left of the kept tab, one by one. Home is never a
+        // victim; when only Home is left, fall through to the right side.
+        if (app.tabBulkCloseMode != 3) {
+            for (int i = 0; i < keep; i++) {
+                if (!app.tabs[i].home) { victim = i; break; }
+            }
+        }
+        if (victim < 0 && app.tabBulkCloseMode != 2) {
+            for (int i = keep + 1; i < (int)app.tabs.size(); i++) {
+                if (!app.tabs[i].home) { victim = i; break; }
+            }
         }
         if (victim < 0) {
             app.tabBulkCloseMode = 0;
@@ -1891,6 +2004,12 @@ void tabDragMove(App& app, HWND hwnd, int x, int y) {
     }
 
     int index = app.tabDragIndex;
+    if (app.tabs[index].home) {
+        app.tabDragIndex = -1;
+        app.tabDragging = false;
+        if (GetCapture() == hwnd) ReleaseCapture();
+        return;
+    }
     bool active = index == app.activeTab;
     bool dirty = active ? (app.editMode && app.editorDirty)
                         : (app.tabs[index].editMode &&
@@ -1930,7 +2049,9 @@ void tabDragMove(App& app, HWND hwnd, int x, int y) {
     StripMetrics m = stripMetrics(app);
     float gap = dpi(app, 2.0f);
     int slot = m.firstVisible + (int)(((float)x - m.tabsLeft) / (m.tabWidth + gap));
-    slot = std::clamp(slot, m.firstVisible, m.firstVisible + m.visibleCount - 1);
+    const int firstFile = (!app.tabs.empty() && app.tabs[0].home) ? 1 : 0;
+    slot = std::clamp(slot, std::max(m.firstVisible, firstFile),
+                      m.firstVisible + m.visibleCount - 1);
     if (slot != app.tabDragIndex) {
         App::DocTab moved = std::move(app.tabs[app.tabDragIndex]);
         app.tabs.erase(app.tabs.begin() + app.tabDragIndex);
@@ -1944,6 +2065,15 @@ void tabDragMove(App& app, HWND hwnd, int x, int y) {
 
 void tabDragEnd(App& app, HWND hwnd, int x, int y) {
     if (app.tabDragIndex < 0) return;
+    if (app.tabDragIndex >= (int)app.tabs.size() ||
+        app.tabs[app.tabDragIndex].home) {
+        app.tabDragIndex = -1;
+        app.tabDragging = false;
+        app.tabDragDetached = false;
+        ghostDestroy(app);
+        if (GetCapture() == hwnd) ReleaseCapture();
+        return;
+    }
     int index = app.tabDragIndex;
     bool detached = app.tabDragDetached;
     app.tabDragIndex = -1;

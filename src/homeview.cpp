@@ -4,9 +4,12 @@
 #include "homeview.h"
 
 #include <dwrite_1.h>
+#include <imm.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <memory>
 #include <thread>
 
@@ -61,14 +64,18 @@ void dispatchScans(App& app, HWND hwnd) {
     }
 }
 
-// Same hand-over as the launcher's recent rows: open into a new tab, then
-// close the empty shell tab the launcher lived in
+// Open a file from Home into a new tab. Home is the fixed workspace tab and
+// stays at index 0; only document windows without Home keep the old hand-over.
 void openFromHome(App& app, HWND hwnd, const std::wstring& path) {
+    const bool wasHome = !app.home.root.empty();
+    if (wasHome) tabsEnsureHome(app);
     tabsInit(app);
     int shellId = app.tabs[app.activeTab].id;
     tabOpenPath(app, hwnd, toUtf8(path));
-    for (int i = 0; i < (int)app.tabs.size(); i++) {
-        if (app.tabs[i].id == shellId) { tabCloseIndex(app, hwnd, i); break; }
+    if (!wasHome) {
+        for (int i = 0; i < (int)app.tabs.size(); i++) {
+            if (app.tabs[i].id == shellId) { tabCloseIndex(app, hwnd, i); break; }
+        }
     }
 }
 
@@ -123,6 +130,7 @@ bool activateRepo(App& app, const Settings& st, const std::string& id) {
     H.columnsRoot = H.root;
     H.hoverColumn = -1;
     H.lastClickColumn = -1;
+    tabsEnsureHome(app);
     return true;
 }
 
@@ -234,6 +242,84 @@ void settle(App& app, HWND hwnd) {
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// --- Home file operations --------------------------------------------------
+
+bool pathExists(const std::wstring& path) {
+    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+DWORD recyclePath(const std::wstring& path) {
+    std::wstring from = path;
+    from.push_back(L'\0');  // SHFileOperation needs a double-NUL list
+    SHFILEOPSTRUCTW op{};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.c_str();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    int result = SHFileOperationW(&op);
+    if (result != 0) return (DWORD)result;
+    return op.fAnyOperationsAborted ? ERROR_CANCELLED : 0;
+}
+
+// Runs the modal's pending action. On success the dialog closes and the
+// active directory rescans; on failure the dialog stays open with an error.
+void homeCommitDialog(App& app, HWND hwnd) {
+    HomeState& H = app.home;
+    H.dialogCommit = false;
+    if (H.dialog == HomeDialogKind::None) return;
+    const std::wstring dir = H.dir;
+    auto fail = [&](HomeDialogError error, DWORD code = 0) {
+        H.dialogError = error;
+        H.dialogErrorCode = code;
+        InvalidateRect(hwnd, nullptr, FALSE);
+    };
+
+    if (H.dialog == HomeDialogKind::ConfirmDelete) {
+        DWORD code = recyclePath(dirmodel::join(dir, H.dialogOriginal));
+        if (code) {
+            fail(HomeDialogError::Failed, code);
+            return;
+        }
+        homeDialogClose(H);
+        homeNavigate(H, dir, L"");
+        return;
+    }
+
+    const std::wstring name = H.dialogText;
+    if (name.empty()) { fail(HomeDialogError::Empty); return; }
+    const std::wstring target = dirmodel::join(dir, name);
+    if (H.dialog == HomeDialogKind::NewFile) {
+        HANDLE file = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            DWORD code = GetLastError();
+            fail(pathExists(target) ? HomeDialogError::Exists
+                                    : HomeDialogError::Failed, code);
+            return;
+        }
+        CloseHandle(file);
+    } else if (H.dialog == HomeDialogKind::NewFolder) {
+        if (!CreateDirectoryW(target.c_str(), nullptr)) {
+            DWORD code = GetLastError();
+            fail(pathExists(target) ? HomeDialogError::Exists
+                                    : HomeDialogError::Failed, code);
+            return;
+        }
+    } else if (H.dialog == HomeDialogKind::Rename) {
+        const std::wstring source = dirmodel::join(dir, H.dialogOriginal);
+        if (source == target) {
+            homeDialogClose(H);
+            return;
+        }
+        if (pathExists(target)) { fail(HomeDialogError::Exists); return; }
+        if (!MoveFileW(source.c_str(), target.c_str())) {
+            fail(HomeDialogError::Failed, GetLastError());
+            return;
+        }
+    }
+    homeDialogClose(H);
+    homeNavigate(H, dir, name);
+}
+
 // --- Home B column browser -------------------------------------------------
 
 void saveActiveColumn(HomeState& H) {
@@ -311,9 +397,9 @@ D2D1_COLOR_F withAlpha(D2D1_COLOR_F c, float a) { c.a = a; return c; }
 
 struct Fmts {
     IDWriteTextFormat *left = nullptr, *right = nullptr, *bold = nullptr, *body = nullptr,
-        *caption = nullptr, *mono = nullptr;
+        *caption = nullptr, *mono = nullptr, *tag = nullptr, *button = nullptr;
     void release() {
-        for (auto** f : {&left, &right, &bold, &body, &caption, &mono})
+        for (auto** f : {&left, &right, &bold, &body, &caption, &mono, &tag, &button})
             if (*f) { (*f)->Release(); *f = nullptr; }
     }
 };
@@ -355,6 +441,65 @@ void text(App& app, IDWriteTextFormat* f, const std::wstring& s, float x, float 
 void fill(App& app, float l, float t, float r, float b, D2D1_COLOR_F c) {
     app.brush->SetColor(c);
     app.renderTarget->FillRectangle(D2D1::RectF(l, t, r, b), app.brush);
+}
+
+void fillRound(App& app, float l, float t, float r, float b, float radius, D2D1_COLOR_F c) {
+    if (r <= l || b <= t) return;
+    const float rad = std::max(0.0f, std::min(radius, std::min(r - l, b - t) / 2.0f));
+    app.brush->SetColor(c);
+    app.renderTarget->FillRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(l, t, r, b), rad, rad), app.brush);
+}
+
+void strokeRound(App& app, float l, float t, float r, float b, float radius,
+                 D2D1_COLOR_F c, float width) {
+    const float rad = std::max(0.0f, std::min(radius, std::min(r - l, b - t) / 2.0f));
+    app.brush->SetColor(c);
+    app.renderTarget->DrawRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(l, t, r, b), rad, rad), app.brush, width);
+}
+
+// A small badge label for a file row: MD, TXT, PDF, IMG, ...
+std::wstring fileTypeTag(const Entry& e) {
+    if (e.kind == Kind::Folder) return L"";
+    const size_t dot = e.name.find_last_of(L'.');
+    std::wstring ext = dot == std::wstring::npos ? std::wstring() : e.name.substr(dot + 1);
+    for (auto& c : ext) c = (wchar_t)std::towupper(c);
+    if (ext == L"MD" || ext == L"MDX" || ext == L"MARKDOWN") return L"MD";
+    if (ext == L"PNG" || ext == L"JPG" || ext == L"JPEG" || ext == L"GIF" ||
+        ext == L"WEBP" || ext == L"BMP" || ext == L"SVG" || ext == L"AVIF")
+        return L"IMG";
+    if (ext == L"HTML" || ext == L"HTM") return L"HTML";
+    if (ext == L"YML" || ext == L"YAML") return L"YAML";
+    if (ext.empty() || ext.size() > 4) return L"FILE";
+    return ext;
+}
+
+void drawSearchIcon(App& app, float x, float y, float h, D2D1_COLOR_F c) {
+    const float radius = dpi(app, 4.2f);
+    const float cx = x + radius;
+    const float cy = y + h / 2.0f;
+    app.brush->SetColor(c);
+    app.renderTarget->DrawEllipse(
+        D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), app.brush, dpi(app, 1.25f));
+    app.renderTarget->DrawLine(
+        D2D1::Point2F(cx + radius * 0.72f, cy + radius * 0.72f),
+        D2D1::Point2F(cx + radius * 1.55f, cy + radius * 1.55f), app.brush, dpi(app, 1.35f));
+}
+
+// Thin scroll position rail at the right edge of an overflowing column.
+void drawColumnScroll(App& app, float right, float top, float height, int total, int visible,
+                      int first, D2D1_COLOR_F track, D2D1_COLOR_F thumb) {
+    if (total <= visible || height < dpi(app, 18)) return;
+    const float width = dpi(app, 3);
+    const float x = right - dpi(app, 10);
+    fillRound(app, x, top, x + width, top + height, width / 2.0f, track);
+    float thumbH = std::max(dpi(app, 24), height * (float)visible / (float)total);
+    thumbH = std::min(thumbH, height);
+    const int maxFirst = std::max(1, total - visible);
+    const float frac = std::clamp((float)first / (float)maxFirst, 0.0f, 1.0f);
+    const float y = top + (height - thumbH) * frac;
+    fillRound(app, x, y, x + width, y + thumbH, width / 2.0f, thumb);
 }
 
 std::wstring formatWhen(unsigned long long ticks) {
@@ -475,7 +620,15 @@ void treeSync(HomeState& H) {
 // --- Public: state ---------------------------------------------------------
 
 bool homeActive(const App& app) {
-    return startPageActive(app) && app.home.booted;
+    if (!startPageActive(app) || !app.home.booted) return false;
+    // Workspace windows have a fixed Home tab: only that tab shows Home.
+    // Windows without a Home tab (single-document launches, satellites)
+    // keep the old "any empty viewer tab is the start page" behaviour.
+    bool hasHome = false;
+    for (const App::DocTab& tab : app.tabs) hasHome = hasHome || tab.home;
+    if (!hasHome) return true;
+    return app.activeTab >= 0 && app.activeTab < (int)app.tabs.size() &&
+           app.tabs[app.activeTab].home;
 }
 
 // With a configured startup mode or at least one repository, Home owns the
@@ -504,10 +657,67 @@ void homeEnsureRoot(App& app) {
 
 // --- Public: input ---------------------------------------------------------
 
+void homeRefresh(App& app, HWND hwnd) { settle(app, hwnd); }
+
+bool homePositionImeWindow(App& app, HWND hwnd) {
+    HomeState& H = app.home;
+    if (H.dialog == HomeDialogKind::None ||
+        H.dialog == HomeDialogKind::ConfirmDelete ||
+        H.dialogFieldHit.r <= H.dialogFieldHit.l) {
+        return false;
+    }
+    HIMC himc = ImmGetContext(hwnd);
+    if (!himc) return false;
+    COMPOSITIONFORM composition{};
+    composition.dwStyle = CFS_POINT;
+    composition.ptCurrentPos = {(LONG)H.dialogCaretX, (LONG)H.dialogCaretY};
+    ImmSetCompositionWindow(himc, &composition);
+    CANDIDATEFORM candidate{};
+    candidate.dwStyle = CFS_CANDIDATEPOS;
+    candidate.ptCurrentPos = composition.ptCurrentPos;
+    ImmSetCandidateWindow(himc, &candidate);
+    ImmReleaseContext(hwnd, himc);
+    return true;
+}
+
+bool homeImeComposition(App& app, HWND hwnd, LPARAM lParam) {
+    HomeState& H = app.home;
+    if (H.dialog == HomeDialogKind::None ||
+        H.dialog == HomeDialogKind::ConfirmDelete) {
+        return false;
+    }
+    if (!(lParam & GCS_RESULTSTR)) return false;
+    HIMC himc = ImmGetContext(hwnd);
+    if (!himc) return false;
+    LONG bytes = ImmGetCompositionStringW(himc, GCS_RESULTSTR, nullptr, 0);
+    if (bytes > 0) {
+        std::wstring text((size_t)bytes / sizeof(wchar_t), L'\0');
+        LONG got = ImmGetCompositionStringW(himc, GCS_RESULTSTR, text.data(), bytes);
+        if (got > 0) {
+            for (wchar_t c : text) {
+                if (c >= 32) homeChar(H, c);
+            }
+            // The IME result replaces the WM_CHAR stream for this commit.
+            app.swallowCharsUntil = std::chrono::steady_clock::now() +
+                                    std::chrono::milliseconds(200);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+    }
+    ImmReleaseContext(hwnd, himc);
+    return true;
+}
+
 bool homeOnKeyDown(App& app, HWND hwnd, WPARAM vk) {
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     HomeState& H = app.home;
+    // The file-operation modal owns the keyboard while it is open.
+    if (H.dialog != HomeDialogKind::None) {
+        homeKey(H, (unsigned)vk, ctrl, shift);
+        if (H.dialogCommit) homeCommitDialog(app, hwnd);
+        settle(app, hwnd);
+        return true;
+    }
     // Home B: Enter/l/→ opens a folder into the next column; h/←/Backspace
     // closes the rightmost column. Other keys stay with the shared logic.
     if (!ctrl && H.screen == HomeScreen::Home && !H.searching) {
@@ -525,6 +735,12 @@ bool homeOnKeyDown(App& app, HWND hwnd, WPARAM vk) {
         }
     }
     bool handled = homeKey(H, (unsigned)vk, ctrl, shift);
+    // The key that opened the modal must not leak its typed character into
+    // the new name field (same guard as the '/' search opener).
+    if (handled && H.dialog != HomeDialogKind::None) {
+        app.swallowCharsUntil = std::chrono::steady_clock::now() +
+                                std::chrono::milliseconds(180);
+    }
     if (handled) settle(app, hwnd);
     return handled;
 }
@@ -536,6 +752,7 @@ bool homeOnChar(App& app, HWND hwnd, wchar_t c) {
 }
 
 bool homeOnMouseMove(App& app, HWND, int x, int y) {
+    if (app.home.dialog != HomeDialogKind::None) return false;
     x -= (int)documentViewportX(app);  // rects are recorded in the translated space
     int hoverColumn = -1, hoverRow = -1;
     for (const auto& hit : app.home.columnHits) {
@@ -563,6 +780,17 @@ bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y) {
             for (const auto& hit : H.rowHits) {
                 if (in(hit.first)) { H.repoSel = hit.second; homeChooseRepo(H, hit.second); break; }
             }
+        }
+        settle(app, hwnd);
+        return true;
+    }
+
+    if (H.dialog != HomeDialogKind::None) {
+        if (in(H.dialogPrimaryHit)) {
+            H.dialogCommit = true;
+            homeCommitDialog(app, hwnd);
+        } else if (in(H.dialogCancelHit)) {
+            homeDialogClose(H);
         }
         settle(app, hwnd);
         return true;
@@ -613,7 +841,7 @@ bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y) {
 
 void homeOnWheel(App& app, HWND hwnd, float notches) {
     HomeState& H = app.home;
-    if (H.screen == HomeScreen::Picker) return;
+    if (H.screen == HomeScreen::Picker || H.dialog != HomeDialogKind::None) return;
     int maxTop = std::max(0, (int)H.view.size() - H.visibleRows);
     H.topRow = std::clamp(H.topRow - (int)(notches * 3.0f), 0, maxTop);
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -719,6 +947,115 @@ static void renderPicker(App& app, const Fmts& fm) {
     else text(app, fm.left, hint, pad, bodyBottom, W - 2 * pad, ftrH, dim);
 }
 
+void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top,
+                      float bottom) {
+    if (H.dialog == HomeDialogKind::None) return;
+    const D2DTheme& th = app.theme;
+    const bool confirm = H.dialog == HomeDialogKind::ConfirmDelete;
+    const float cardW = std::min(dpi(app, 460), W - dpi(app, 56));
+    const float cardH = dpi(app, confirm ? 186.0f : 224.0f);
+    const float cardX = (W - cardW) / 2.0f;
+    const float cardY = top + std::max(dpi(app, 24), (bottom - top - cardH) / 2.0f);
+    const float pad = dpi(app, 20);
+    const float radius = dpi(app, 10);
+
+    fill(app, 0, top, W, bottom, D2D1::ColorF(0, 0, 0, 0.30f));
+    fillRound(app, cardX, cardY, cardX + cardW, cardY + cardH, radius,
+              mix(th.background, th.text, th.isDark ? 0.06f : -0.02f));
+    strokeRound(app, cardX + 0.5f, cardY + 0.5f, cardX + cardW - 0.5f,
+                cardY + cardH - 0.5f, radius, withAlpha(th.accent, 0.42f), 1.0f);
+
+    const wchar_t* title =
+        H.dialog == HomeDialogKind::NewFile ? tr(app, "home.new_file")
+        : H.dialog == HomeDialogKind::NewFolder ? tr(app, "home.new_folder")
+        : H.dialog == HomeDialogKind::Rename ? tr(app, "home.rename")
+                                             : tr(app, "home.delete");
+    text(app, fm.bold, title, cardX + pad, cardY + dpi(app, 14),
+         cardW - 2 * pad, dpi(app, 26), th.heading);
+
+    const float buttonsY = cardY + cardH - dpi(app, 48);
+    const float primaryW = dpi(app, 104), cancelW = dpi(app, 82);
+    const float primaryX = cardX + cardW - pad - primaryW;
+    const float cancelX = primaryX - dpi(app, 10) - cancelW;
+    H.dialogPrimaryHit = HomeRect{primaryX, buttonsY, primaryX + primaryW,
+                                 buttonsY + dpi(app, 30)};
+    H.dialogCancelHit = HomeRect{cancelX, buttonsY, cancelX + cancelW,
+                                buttonsY + dpi(app, 30)};
+
+    if (confirm) {
+        wchar_t message[512];
+        swprintf_s(message, _countof(message), tr(app, "home.delete_confirm"),
+                   H.dialogOriginal.c_str());
+        text(app, fm.body, message, cardX + pad, cardY + dpi(app, 52),
+             cardW - 2 * pad, dpi(app, 62), withAlpha(th.text, 0.78f));
+        H.dialogFieldHit = HomeRect{};
+    } else {
+        const float fieldY = cardY + dpi(app, 50);
+        const float fieldH = dpi(app, 36);
+        H.dialogFieldHit = HomeRect{cardX + pad, fieldY, cardX + cardW - pad,
+                                   fieldY + fieldH};
+        fillRound(app, cardX + pad, fieldY, cardX + cardW - pad, fieldY + fieldH,
+                  dpi(app, 6), mix(th.background, th.text, th.isDark ? 0.05f : -0.03f));
+        strokeRound(app, cardX + pad + 0.5f, fieldY + 0.5f,
+                    cardX + cardW - pad - 0.5f, fieldY + fieldH - 0.5f,
+                    dpi(app, 6), withAlpha(th.accent, 0.55f), 1.0f);
+        const float textX = cardX + pad + dpi(app, 11);
+        const int caret = std::clamp(H.dialogCaret, 0, (int)H.dialogText.size());
+        const std::wstring before = H.dialogText.substr(0, caret);
+        const float caretX = textX + measureText(app, before, fm.mono);
+        H.dialogCaretX = caretX;
+        H.dialogCaretY = fieldY + fieldH / 2.0f;
+        text(app, fm.mono, H.dialogText, textX, fieldY,
+             cardW - 2 * pad - dpi(app, 22), fieldH, th.text);
+        const float caretTop = fieldY + dpi(app, 8);
+        fill(app, caretX, caretTop, caretX + dpi(app, 1.6f),
+             fieldY + fieldH - dpi(app, 8), th.accent);
+
+        std::wstring error;
+        if (H.dialogError == HomeDialogError::Empty) error = tr(app, "home.name_empty");
+        else if (H.dialogError == HomeDialogError::Invalid) error = tr(app, "home.name_invalid");
+        else if (H.dialogError == HomeDialogError::Exists) error = tr(app, "home.name_exists");
+        else if (H.dialogError == HomeDialogError::Failed) {
+            if (H.dialogErrorCode == ERROR_ACCESS_DENIED) {
+                error = tr(app, "home.op_denied");
+            } else if (H.dialogErrorCode) {
+                wchar_t buf[160];
+                swprintf_s(buf, _countof(buf), tr(app, "home.op_failed_code"),
+                           (unsigned)H.dialogErrorCode);
+                error = buf;
+            } else {
+                error = tr(app, "home.op_failed");
+            }
+        }
+        if (!error.empty())
+            text(app, fm.caption, error, cardX + pad, fieldY + fieldH + dpi(app, 8),
+                 cardW - 2 * pad, dpi(app, 24), D2D1::ColorF(0.86f, 0.46f, 0.42f));
+        else {
+            const wchar_t* hint = H.dialog == HomeDialogKind::NewFile
+                                      ? tr(app, "home.new_file_hint")
+                                      : tr(app, "home.dialog_hint");
+            text(app, fm.caption, hint, cardX + pad, fieldY + fieldH + dpi(app, 8),
+                 cardW - 2 * pad, dpi(app, 24), withAlpha(th.text, 0.42f));
+        }
+    }
+
+    const wchar_t* primary =
+        confirm ? tr(app, "home.delete")
+        : H.dialog == HomeDialogKind::Rename ? tr(app, "home.rename")
+                                             : tr(app, "home.create");
+    const D2D1_COLOR_F primaryColor =
+        confirm ? D2D1::ColorF(0.78f, 0.38f, 0.34f) : th.accent;
+    fillRound(app, primaryX, buttonsY, primaryX + primaryW,
+              buttonsY + dpi(app, 30), dpi(app, 6), primaryColor);
+    strokeRound(app, cancelX + 0.5f, buttonsY + 0.5f, cancelX + cancelW - 0.5f,
+                buttonsY + dpi(app, 30) - 0.5f, dpi(app, 6),
+                withAlpha(th.text, 0.22f), 1.0f);
+    text(app, fm.button, primary, primaryX, buttonsY, primaryW, dpi(app, 30),
+         th.background);
+    text(app, fm.button, tr(app, "home.cancel"), cancelX, buttonsY, cancelW,
+         dpi(app, 30), withAlpha(th.text, 0.78f));
+}
+
 void renderHome(App& app) {
     HomeState& H = app.home;
     H.rowHits.clear();
@@ -753,63 +1090,82 @@ void renderHome(App& app) {
     const D2D1_COLOR_F line = withAlpha(th.text, 0.12f);
     const float W = documentViewportWidth(app);
     const float top = chromeTopHeight(app), bottom = (float)app.height;
-    const float hdrH = dpi(app, 44), ftrH = dpi(app, 30);
+    const float hdrH = dpi(app, 48), ftrH = dpi(app, 32);
     const float bodyTop = top + hdrH, bodyBottom = bottom - ftrH;
-    const float pad = dpi(app, 14);
-    const float rowH = dpi(app, 30);
+    const float pad = dpi(app, 18);
+    const float rowH = dpi(app, 34);
 
     Fmts fm;
-    fm.left = makeFormat(app, 13, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false);
-    fm.right = makeFormat(app, 12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING, false);
+    fm.left = makeFormat(app, 13.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false);
+    fm.right = makeFormat(app, 11.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING, false);
     fm.bold = makeFormat(app, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false);
     fm.body = makeFormat(app, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, true);
     fm.caption = makeFormat(app, 11.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false);
-    fm.mono = makeFormat(app, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false, L"Cascadia Mono");
+    fm.mono = makeFormat(app, 13.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false, L"Cascadia Mono");
+    fm.tag = makeFormat(app, 9.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, false, L"Cascadia Mono");
+    fm.button = makeFormat(app, 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, false);
 
     fill(app, 0, top, W, bottom, th.background);
 
-    // Top bar: repository chip, breadcrumb, search box
-    fill(app, 0, top, W, bodyTop, mix(th.background, th.text, th.isDark ? 0.04f : -0.04f));
+    // Top bar: repository chip, breadcrumb, search box.
+    fill(app, 0, top, W, bodyTop, mix(th.background, th.text, th.isDark ? 0.045f : -0.045f));
     fill(app, 0, bodyTop - 1, W, bodyTop, line);
 
     std::wstring repoName = dirmodel::leafOf(H.root);
     if (repoName.empty()) repoName = H.root;
     std::wstring repoChip = repoName + L"  \x25BE";
-    float chipW = measureText(app, repoChip, fm.bold) + dpi(app, 22);
-    float chipX = pad, chipY = top + dpi(app, 8), chipH = hdrH - dpi(app, 16);
+    const float chipH = dpi(app, 30);
+    const float chipY = top + (hdrH - chipH) / 2.0f;
+    const float chipX = pad;
+    const float chipW = measureText(app, repoChip, fm.bold) + dpi(app, 40);
     H.repoChipHit = HomeRect{chipX, chipY, chipX + chipW, chipY + chipH};
-    D2D1_COLOR_F chipBorder = th.accent; chipBorder.a = 0.55f;
-    app.brush->SetColor(chipBorder);
-    app.renderTarget->DrawRoundedRectangle(
-        D2D1::RoundedRect(D2D1::RectF(chipX, chipY, chipX + chipW, chipY + chipH),
-                          dpi(app, 4), dpi(app, 4)), app.brush, 1.0f);
-    text(app, fm.bold, repoChip, chipX + dpi(app, 11), chipY, chipW - dpi(app, 16), chipH,
+    fillRound(app, chipX, chipY, chipX + chipW, chipY + chipH, dpi(app, 6),
+              withAlpha(th.accent, 0.10f));
+    strokeRound(app, chipX + 0.5f, chipY + 0.5f, chipX + chipW - 0.5f, chipY + chipH - 0.5f,
+                dpi(app, 6), withAlpha(th.accent, 0.40f), 1.0f);
+    app.brush->SetColor(th.accent);
+    app.renderTarget->FillEllipse(
+        D2D1::Ellipse(D2D1::Point2F(chipX + dpi(app, 12), chipY + chipH / 2.0f),
+                      dpi(app, 2.6f), dpi(app, 2.6f)),
+        app.brush);
+    text(app, fm.bold, repoChip, chipX + dpi(app, 20), chipY, chipW - dpi(app, 26), chipH,
          th.accent);
 
-    const float searchW = std::min(dpi(app, 290), W * 0.34f);
+    const float searchW = std::min(dpi(app, 320), W * 0.36f);
     const float searchX = W - pad - searchW;
-    std::wstring crumb = repoName;
+    // The chip already names the repository: the breadcrumb only shows the
+    // path inside it, so the name is not printed twice.
+    std::wstring crumb = tr(app, "home.root");
     if (H.dir.size() > H.root.size()) {
         std::wstring rel = H.dir.substr(H.root.size());
         while (!rel.empty() && (rel[0] == L'\\' || rel[0] == L'/')) rel.erase(0, 1);
-        for (auto& c : rel) if (c == L'\\') c = L'/';
-        crumb += L" / " + rel;
+        std::wstring pretty;
+        for (wchar_t c : rel) {
+            if (c == L'\\' || c == L'/') pretty += L" / ";
+            else pretty += c;
+        }
+        if (!pretty.empty()) crumb += L" / " + pretty;
     }
-    float crumbX = chipX + chipW + dpi(app, 16);
-    text(app, fm.mono, crumb, crumbX, top, std::max(0.0f, searchX - crumbX - pad), hdrH, dim);
+    const float crumbX = chipX + chipW + dpi(app, 18);
+    text(app, fm.mono, crumb, crumbX, top, std::max(0.0f, searchX - crumbX - pad), hdrH,
+         withAlpha(th.text, 0.60f));
 
-    D2D1_RECT_F searchRect = D2D1::RectF(searchX, chipY, searchX + searchW, chipY + chipH);
+    const D2D1_RECT_F searchRect =
+        D2D1::RectF(searchX, chipY, searchX + searchW, chipY + chipH);
     H.searchHit = HomeRect{searchRect.left, searchRect.top, searchRect.right, searchRect.bottom};
-    D2D1_COLOR_F searchBorder = th.text; searchBorder.a = 0.18f;
-    app.brush->SetColor(searchBorder);
-    app.renderTarget->DrawRoundedRectangle(
-        D2D1::RoundedRect(searchRect, dpi(app, 4), dpi(app, 4)), app.brush, 1.0f);
+    fillRound(app, searchRect.left, searchRect.top, searchRect.right, searchRect.bottom,
+              dpi(app, 6), withAlpha(th.text, 0.035f));
+    strokeRound(app, searchRect.left + 0.5f, searchRect.top + 0.5f, searchRect.right - 0.5f,
+                searchRect.bottom - 0.5f, dpi(app, 6),
+                H.searching ? withAlpha(th.accent, 0.65f) : withAlpha(th.text, 0.18f), 1.0f);
+    drawSearchIcon(app, searchRect.left + dpi(app, 13), searchRect.top, chipH,
+                   H.searching ? th.accent : dim);
     if (H.searching) {
-        text(app, fm.mono, L"/ " + H.query + L"\x2502", searchRect.left + dpi(app, 10),
-             searchRect.top, searchW - dpi(app, 20), chipH, th.accent);
+        text(app, fm.mono, L"/ " + H.query + L"\x2502", searchRect.left + dpi(app, 31),
+             searchRect.top, searchW - dpi(app, 42), chipH, th.accent);
     } else {
-        text(app, fm.mono, tr(app, "home.search"), searchRect.left + dpi(app, 10),
-             searchRect.top, searchW - dpi(app, 20), chipH, dim);
+        text(app, fm.mono, tr(app, "home.search"), searchRect.left + dpi(app, 31),
+             searchRect.top, searchW - dpi(app, 42), chipH, dim);
     }
 
     // Miller columns: the active column is on the right; clicking a folder
@@ -828,37 +1184,61 @@ void renderHome(App& app) {
         cols.push_back({&c.path, &c.listing, &c.view, c.sel, c.topRow, false});
     cols.push_back({&H.dir, &H.current, &H.view, H.sel, H.topRow, true});
     const int count = (int)cols.size();
-    const float gap = dpi(app, 10);
-    float colW;
-    if (count == 1) colW = std::min(dpi(app, 640), W - 2 * pad);
-    else if (count == 2) colW = std::min(dpi(app, 460), (W - 2 * pad - gap) / 2);
-    else colW = std::min(dpi(app, 400), (W - 2 * pad - 2 * gap) / 3);
-    colW = std::max(colW, dpi(app, 170));
-    const float totalW = count * colW + (count - 1) * gap;
-    const float startX = (W - totalW) / 2;
-    const float headerH = dpi(app, 30);
+    const float gap = dpi(app, 16);
+    // The responsive rules are written in DIPs. app.width is physical pixels,
+    // so convert before choosing widths: otherwise a 150% display would make
+    // an "800 DIP" column only 533 DIP wide.
+    const float uiScale = app.contentScale > 0.01f ? app.contentScale : 1.0f;
+    const HomeColumnsLayout layout =
+        homeColumnsLayout(W / uiScale, count, pad / uiScale, gap / uiScale);
+    const float colW = layout.width * uiScale;
+    const float startX = layout.startX * uiScale;
+    const float radius = dpi(app, 9);
+    const float headerH = dpi(app, 32);
     const float rowsTop = bodyTop + headerH + dpi(app, 4);
     const int visibleRows = std::max(1, (int)((bodyBottom - rowsTop) / rowH));
     H.visibleRows = visibleRows;
+
+    const float badgeW = dpi(app, 28), badgeH = dpi(app, 17), leadW = dpi(app, 36);
+    const float rightPad = dpi(app, 18);
+    const float sizeW = dpi(app, 64), whenW = dpi(app, 90);
+    const bool showMeta = colW > dpi(app, 360);
+    const float metaW = showMeta ? sizeW + whenW + dpi(app, 20) : 0.0f;
+    const float nameW =
+        std::max(dpi(app, 24), colW - pad - rightPad - leadW - metaW);
 
     for (int ci = 0; ci < count; ci++) {
         const ColRef& col = cols[ci];
         const float x = startX + ci * (colW + gap);
         const bool active = col.active;
-        const D2D1_COLOR_F surface = mix(th.background, th.text, th.isDark ? (active ? 0.035f : 0.018f)
-                                                                         : (active ? -0.025f : -0.012f));
-        fill(app, x, bodyTop, x + colW, bodyBottom, surface);
-        D2D1_COLOR_F border = active ? withAlpha(th.accent, 0.30f) : line;
-        app.brush->SetColor(border);
-        app.renderTarget->DrawRectangle(
-            D2D1::RectF(x + 0.5f, bodyTop + 0.5f, x + colW - 0.5f, bodyBottom - 0.5f),
-            app.brush, 1.0f);
-        fill(app, x, bodyTop + headerH, x + colW, bodyTop + headerH + 1, line);
+        // A soft shadow and a rounded, slightly lifted surface make the
+        // columns read as sheets instead of flat boxes.
+        const D2D1_COLOR_F shadow = th.isDark ? D2D1::ColorF(0, 0, 0, 0.30f)
+                                              : D2D1::ColorF(0, 0, 0, 0.07f);
+        fillRound(app, x + dpi(app, 1), bodyTop + dpi(app, 3), x + colW + dpi(app, 1),
+                  bodyBottom + dpi(app, 1), radius, shadow);
+        const float tint = th.isDark ? (active ? 0.050f : 0.024f)
+                                     : (active ? -0.030f : -0.014f);
+        fillRound(app, x, bodyTop, x + colW, bodyBottom, radius,
+                  mix(th.background, th.text, tint));
+        strokeRound(app, x + 0.5f, bodyTop + 0.5f, x + colW - 0.5f, bodyBottom - 0.5f,
+                    radius, active ? withAlpha(th.accent, 0.48f) : withAlpha(th.text, 0.14f),
+                    active ? 1.25f : 1.0f);
+        fill(app, x + pad, bodyTop + headerH, x + colW - pad, bodyTop + headerH + 1.0f,
+             withAlpha(th.text, 0.08f));
 
         std::wstring colName = (*col.path == H.root) ? repoName : dirmodel::leafOf(*col.path);
         if (colName.empty()) colName = *col.path;
-        text(app, fm.caption, colName, x + pad, bodyTop, colW - 2 * pad, headerH,
-             active ? th.accent : dim);
+        wchar_t countBuf[64];
+        swprintf_s(countBuf, _countof(countBuf),
+                   tr(app, col.view->size() == 1 ? "home.item" : "home.items"),
+                   (unsigned)col.view->size());
+        // A single column is already identified by the breadcrumb: keep its
+        // header quiet and show only the item count there.
+        const std::wstring colHead =
+            count > 1 ? colName + L"  \x00B7  " + countBuf : std::wstring(countBuf);
+        text(app, fm.caption, colHead, x + pad, bodyTop, colW - pad * 2, headerH,
+             (count > 1 && active) ? th.accent : withAlpha(th.text, 0.58f));
 
         int topRow = col.topRow;
         int maxTop = std::max(0, (int)col.view->size() - visibleRows);
@@ -870,48 +1250,93 @@ void renderHome(App& app) {
             H.topRow = topRow;
         }
 
-        const float sizeW = dpi(app, 64), whenW = dpi(app, 92);
-        const bool showMeta = colW > dpi(app, 360);
-        const float nameW = colW - pad * 2 - (showMeta ? sizeW + whenW : 0.0f);
         float y = rowsTop;
         if (col.view->empty()) {
             const wchar_t* msg = !col.listing->ok ? L"Can't read this folder" : L"Empty folder";
-            text(app, fm.mono, msg, x + pad, y, colW - 2 * pad, rowH, dim);
+            text(app, fm.mono, msg, x + pad + leadW, y, colW - pad * 2 - leadW, rowH, dim);
         }
         for (int n = 0; n < visibleRows; n++) {
             int row = topRow + n;
             if (row >= (int)col.view->size()) break;
             const Entry& e = col.listing->entries[(*col.view)[row]];
-            bool selected = row == col.sel;
-            bool hovered = ci == H.hoverColumn && row == H.hoverRow;
-            if (selected) fill(app, x + 1, y, x + colW - 1, y + rowH, mix(th.background, th.accent, 0.24f));
-            else if (hovered) fill(app, x + 1, y, x + colW - 1, y + rowH, mix(th.background, th.text, 0.06f));
-            text(app, fm.mono, entryLabel(e), x + pad, y, nameW, rowH,
+            const bool selected = row == col.sel;
+            const bool hovered = ci == H.hoverColumn && row == H.hoverRow;
+            if (selected) {
+                fill(app, x + 1, y, x + colW - 1, y + rowH,
+                     mix(th.background, th.accent, th.isDark ? 0.22f : 0.16f));
+                fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
+                     y + rowH - dpi(app, 2), th.accent);
+            } else if (hovered) {
+                fill(app, x + 1, y, x + colW - 1, y + rowH,
+                     mix(th.background, th.text, th.isDark ? 0.10f : 0.075f));
+            }
+
+            // Folder chevron or file-type badge in a fixed leading slot.
+            const float badgeX = x + pad;
+            const float badgeY = y + (rowH - badgeH) / 2.0f;
+            if (e.kind == Kind::Folder) {
+                text(app, fm.tag, L"\x25B8", badgeX, y, badgeW, rowH, th.accent);
+            } else {
+                const D2D1_COLOR_F tagBg =
+                    withAlpha(e.kind == Kind::Document ? th.accent : th.text, 0.10f);
+                const D2D1_COLOR_F tagFg =
+                    e.kind == Kind::Document ? th.accent : withAlpha(th.text, 0.55f);
+                fillRound(app, badgeX, badgeY, badgeX + badgeW, badgeY + badgeH,
+                          dpi(app, 3), tagBg);
+                text(app, fm.tag, fileTypeTag(e), badgeX, y, badgeW, rowH, tagFg);
+            }
+
+            text(app, fm.mono, entryLabel(e), x + pad + leadW, y, nameW, rowH,
                  entryColor(th, e, selected));
-            if (showMeta && e.kind != Kind::Folder)
-                text(app, fm.right, dirmodel::formatSize(e.size), x + pad + nameW, y,
-                     sizeW, rowH, dim);
-            if (showMeta)
-                text(app, fm.right, formatWhen(e.mtime), x + pad + nameW + sizeW, y,
-                     whenW, rowH, dim);
+            if (showMeta) {
+                // Name > modified > size: three brightness levels instead of
+                // one flat dim tone for all metadata.
+                const D2D1_COLOR_F sizeC = withAlpha(th.text, selected ? 0.56f : 0.36f);
+                const D2D1_COLOR_F whenC = withAlpha(th.text, selected ? 0.66f : 0.48f);
+                const float whenX = x + colW - rightPad - whenW;
+                const float sizeX = whenX - sizeW - dpi(app, 10);
+                if (e.kind != Kind::Folder)
+                    text(app, fm.right, dirmodel::formatSize(e.size), sizeX, y, sizeW, rowH,
+                         sizeC);
+                text(app, fm.right, formatWhen(e.mtime), whenX, y, whenW, rowH, whenC);
+            }
             H.columnHits.push_back({HomeRect{x, y, x + colW, y + rowH}, ci, row});
             y += rowH;
         }
+
+        const float railH = std::max(
+            0.0f, std::min((float)visibleRows * rowH, bodyBottom - rowsTop) - dpi(app, 8));
+        drawColumnScroll(app, x + colW, rowsTop + dpi(app, 4), railH,
+                         (int)col.view->size(), visibleRows, topRow,
+                         withAlpha(th.text, 0.07f),
+                         withAlpha(active ? th.accent : th.text, active ? 0.55f : 0.28f));
     }
 
-    // Footer: active-column position and key hints
+    // Footer: selected item on the left, key hints on the right.
     fill(app, 0, bodyBottom, W, bottom, mix(th.background, th.text, th.isDark ? 0.05f : -0.04f));
     fill(app, 0, bodyBottom, W, bodyBottom + 1, line);
     if (!H.repoNotice.empty()) {
         text(app, fm.caption, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else {
-        std::wstring countText = H.view.empty()
-            ? std::wstring(L"0 / 0")
-            : std::to_wstring(H.sel + 1) + L" / " + std::to_wstring(H.view.size());
-        text(app, fm.caption, countText, pad, bodyBottom, dpi(app, 90), ftrH, dim);
-        text(app, fm.caption, tr(app, "home.footer"), pad + dpi(app, 90), bodyBottom,
-             W - pad * 2 - dpi(app, 90), ftrH, dim);
+        std::wstring info;
+        if (const Entry* e = homeSelected(H)) {
+            info = e->kind == Kind::Folder
+                       ? e->name + L"  \x00B7  " + tr(app, "home.folder")
+                       : e->name + L"  \x00B7  " + dirmodel::formatSize(e->size);
+        }
+        const std::wstring hints = tr(app, "home.footer");
+        const float hintW = measureText(app, hints, fm.right) + dpi(app, 6);
+        const bool showHints = W - 2 * pad > hintW + dpi(app, 220);
+        if (showHints) {
+            text(app, fm.right, hints, W - pad - hintW, bodyBottom, hintW, ftrH,
+                 withAlpha(th.text, 0.42f));
+        }
+        const float infoW =
+            W - 2 * pad - (showHints ? hintW + dpi(app, 24) : 0.0f);
+        text(app, fm.caption, info, pad, bodyBottom, std::max(0.0f, infoW), ftrH,
+             withAlpha(th.text, 0.68f));
     }
+    renderHomeDialog(app, H, fm, W, top, bottom);
     fm.release();
 }

@@ -5,6 +5,25 @@
 
 using namespace dirmodel;
 
+HomeColumnsLayout homeColumnsLayout(float viewWidth, int count, float pad, float gap) {
+    HomeColumnsLayout out;
+    if (count < 1) count = 1;
+    const float avail = std::max(0.0f, viewWidth - 2.0f * pad);
+    // Single columns get room to breathe on wide windows (800 DIP, 58% of
+    // the window, never wider than 900); two and three columns keep the
+    // classic Miller rhythm. Every width is capped by the space that is
+    // actually there, so narrow windows fill edge to edge.
+    const float preferred =
+        count == 1 ? std::clamp(viewWidth * 0.58f, 800.0f, 900.0f)
+        : count == 2 ? 520.0f
+                     : 400.0f;
+    const float fit = (avail - (count - 1) * gap) / (float)count;
+    out.width = std::max(1.0f, std::min(preferred, fit));
+    out.totalWidth = count * out.width + (count - 1) * gap;
+    out.startX = (viewWidth - out.totalWidth) / 2.0f;
+    return out;
+}
+
 namespace {
 
 std::wstring lower(std::wstring s) {
@@ -78,9 +97,127 @@ void refilter(HomeState& s) {
     updatePreview(s);
 }
 
+bool validHomeName(const std::wstring& name) {
+    if (name.empty() || name.size() > 255) return false;
+    if (name == L"." || name == L"..") return false;
+    for (wchar_t c : name) {
+        // Reject C0/C1 controls and invisible format characters that would
+        // make a visually valid-looking name fail in CreateFileW. CJK and
+        // other printable scripts must stay allowed.
+        if (c < 32 || c == 127 || (c >= 0x80 && c <= 0x9F)) return false;
+        if ((c >= 0x200B && c <= 0x200F) || (c >= 0x202A && c <= 0x202E) ||
+            (c >= 0x2060 && c <= 0x206F) || c == 0xFEFF || c == 0x00AD) {
+            return false;
+        }
+        if (c == L'<' || c == L'>' || c == L':' || c == L'"' || c == L'/' ||
+            c == L'\\' || c == L'|' || c == L'?' || c == L'*') {
+            return false;
+        }
+    }
+    if (name.back() == L' ' || name.back() == L'.') return false;
+    std::wstring base = name.substr(0, name.find(L'.'));
+    for (auto& c : base) c = (wchar_t)std::towupper(c);
+    static const wchar_t* reserved[] = {
+        L"CON", L"PRN", L"AUX", L"NUL", L"COM1", L"COM2", L"COM3", L"COM4",
+        L"COM5", L"COM6", L"COM7", L"COM8", L"COM9", L"LPT1", L"LPT2",
+        L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9"};
+    for (const wchar_t* word : reserved)
+        if (base == word) return false;
+    return true;
+}
+
+void beginDialog(HomeState& s, HomeDialogKind kind) {
+    s.dialog = kind;
+    s.dialogCommit = false;
+    s.dialogError = HomeDialogError::None;
+    s.dialogErrorCode = 0;
+    s.dialogText.clear();
+    s.dialogOriginal.clear();
+    s.dialogCaret = 0;
+    s.dialogParent = s.dir;
+    if (kind == HomeDialogKind::Rename || kind == HomeDialogKind::ConfirmDelete) {
+        const Entry* e = homeSelected(s);
+        if (!e) { s.dialog = HomeDialogKind::None; return; }
+        s.dialogOriginal = e->name;
+        if (kind == HomeDialogKind::Rename) {
+            s.dialogText = e->name;
+            s.dialogCaret = (int)e->name.size();
+        }
+    }
+}
+
+bool dialogKey(HomeState& s, unsigned vk) {
+    if (s.dialog == HomeDialogKind::ConfirmDelete) {
+        if (vk == 0x0D || vk == 'Y') { s.dialogCommit = true; return true; }
+        if (vk == 0x1B || vk == 'N') { homeDialogClose(s); return true; }
+        return true;  // modal: swallow everything else
+    }
+    if (vk == 0x1B) { homeDialogClose(s); return true; }
+    if (vk == 0x0D) {
+        if (s.dialogText.empty()) {
+            s.dialogError = HomeDialogError::Empty;
+        } else if (!validHomeName(s.dialogText)) {
+            s.dialogError = HomeDialogError::Invalid;
+        } else if (s.dialog == HomeDialogKind::Rename &&
+                   s.dialogText == s.dialogOriginal) {
+            homeDialogClose(s);  // unchanged: no-op
+        } else {
+            s.dialogError = HomeDialogError::None;
+            s.dialogCommit = true;
+        }
+        return true;
+    }
+    const int length = (int)s.dialogText.size();
+    switch (vk) {
+        case 0x08:  // Backspace
+            if (s.dialogCaret > 0) {
+                s.dialogText.erase(s.dialogCaret - 1, 1);
+                s.dialogCaret--;
+                s.dialogError = HomeDialogError::None;
+            }
+            return true;
+        case 0x2E:  // Delete
+            if (s.dialogCaret < length) {
+                s.dialogText.erase(s.dialogCaret, 1);
+                s.dialogError = HomeDialogError::None;
+            }
+            return true;
+        case 0x25:  // Left
+            if (s.dialogCaret > 0) s.dialogCaret--;
+            return true;
+        case 0x27:  // Right
+            if (s.dialogCaret < length) s.dialogCaret++;
+            return true;
+        case 0x24:  // Home
+            s.dialogCaret = 0;
+            return true;
+        case 0x23:  // End
+            s.dialogCaret = length;
+            return true;
+        default:
+            return true;  // modal: swallow navigation keys too
+    }
+}
+
 }  // namespace
 
 bool homeHasRoot(const HomeState& s) { return !s.root.empty(); }
+
+void homeDialogClose(HomeState& s) {
+    s.dialog = HomeDialogKind::None;
+    s.dialogText.clear();
+    s.dialogOriginal.clear();
+    s.dialogParent.clear();
+    s.dialogCaret = 0;
+    s.dialogError = HomeDialogError::None;
+    s.dialogErrorCode = 0;
+    s.dialogCommit = false;
+    s.dialogFieldHit = HomeRect{};
+    s.dialogPrimaryHit = HomeRect{};
+    s.dialogCancelHit = HomeRect{};
+    s.dialogCaretX = 0;
+    s.dialogCaretY = 0;
+}
 
 void homeSetRoot(HomeState& s, const std::wstring& root, const std::wstring& startDir) {
     s.root = root;
@@ -93,6 +230,7 @@ void homeSetRoot(HomeState& s, const std::wstring& root, const std::wstring& sta
 
 void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& select) {
     if (s.root.empty() || !isInside(s.root, dir)) return;
+    homeDialogClose(s);  // any explicit navigation leaves the modal
     s.dir = dir;
     s.query.clear();
     s.searching = false;
@@ -192,7 +330,9 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
             if (n) s.pendingRemove = s.repoRows[s.repoSel].id;
             return true;
         case ESC:
-            if (s.root.empty()) return false;  // nothing to go back to
+            // The picker is the bottom of the Esc stack when no repository is
+            // open: consume it and stay put. Esc never quits the application.
+            if (s.root.empty()) return true;
             s.screen = HomeScreen::Home;
             s.repoNotice.clear();
             return true;
@@ -201,10 +341,12 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
 }
 
 bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
+    if (s.dialog != HomeDialogKind::None) return dialogKey(s, vk);
     if (s.screen == HomeScreen::Picker) return pickerKey(s, vk, ctrl);
     enum : unsigned { BACK = 0x08, RET = 0x0D, ESC = 0x1B, PGUP = 0x21, PGDN = 0x22,
                       END = 0x23, HOME = 0x24, LEFT = 0x25, UP = 0x26, RIGHT = 0x27,
-                      DOWN = 0x28, PERIOD = 0xBE, SLASH = 0xBF };
+                      DOWN = 0x28, DEL = 0x2E, PERIOD = 0xBE, SLASH = 0xBF,
+                      F2 = 0x71 };
     if (ctrl) return false;  // Ctrl chords stay with the app
 
     if (s.searching) {
@@ -242,6 +384,18 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             s.refreshRows = true;
             s.repoNotice.clear();
             return true;
+        case 'N':
+            beginDialog(s, shift ? HomeDialogKind::NewFolder
+                                 : HomeDialogKind::NewFile);
+            return true;
+        case 'R':
+        case F2:
+            beginDialog(s, HomeDialogKind::Rename);
+            return true;
+        case 'D':
+        case DEL:
+            beginDialog(s, HomeDialogKind::ConfirmDelete);
+            return true;
         case PERIOD: s.opts.showHidden = !s.opts.showHidden; rebuildView(s, L""); return true;
         case 'S': {
             s.opts.key = s.opts.key == SortKey::Name ? SortKey::Modified
@@ -253,7 +407,9 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             return true;
         }
         case ESC:
-            if (s.query.empty()) return false;
+            // Always consume: clear the filter when there is one, otherwise
+            // this is the bottom of the Esc stack and does nothing.
+            if (s.query.empty()) return true;
             s.query.clear();
             refilter(s);
             return true;
@@ -262,6 +418,16 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
 }
 
 bool homeChar(HomeState& s, wchar_t c) {
+    if (s.dialog != HomeDialogKind::None) {
+        if (s.dialog == HomeDialogKind::ConfirmDelete) return true;
+        if (c >= 32) {
+            int at = std::clamp(s.dialogCaret, 0, (int)s.dialogText.size());
+            s.dialogText.insert(s.dialogText.begin() + at, c);
+            s.dialogCaret = at + 1;
+            s.dialogError = HomeDialogError::None;
+        }
+        return true;
+    }
     if (!s.searching) return false;
     if (s.swallow && c == s.swallow) { s.swallow = 0; return true; }
     s.swallow = 0;

@@ -1063,6 +1063,9 @@ render_document:
     // Title-bar tab strip: the caption itself, above every panel
     renderTabStrip(app);
 
+    // Ctrl+K palette: scrim + card above the page, below Settings/Help.
+    renderQuickJump(app);
+
     // Edit-mode tool rail (design t8): covers the strip's left corner
     // and the old gutter column, so it draws above both
     if (app.editMode) {
@@ -1327,6 +1330,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_MBUTTONDOWN:
             if (app) tabHoverCardDismiss(*app, hwnd);
+            if (app && app->quickJump.open) return 0;
             if (app && app->renderTarget) {
                 int mx = GET_X_LPARAM(lParam);
                 int my = GET_Y_LPARAM(lParam);
@@ -1459,7 +1463,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_MOUSEHWHEEL:
-            if (app) handleMouseHWheel(*app, hwnd, wParam, lParam);
+            if (app && !app->quickJump.open)
+                handleMouseHWheel(*app, hwnd, wParam, lParam);
             return 0;
 
         case WM_MOUSEMOVE:
@@ -1554,6 +1559,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_XBUTTONUP:
             // Mouse side buttons walk back/forward across link jumps
+            if (app && app->quickJump.open) return TRUE;
             if (app) {
                 if (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) {
                     navigateBack(*app, hwnd);
@@ -1599,9 +1605,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_IME_STARTCOMPOSITION:
         case WM_IME_COMPOSITION:
-            // Anchor the IME composition/candidate window at the caret in
-            // edit mode, then let DefWindowProc run default IME handling
-            if (app) editorPositionImeWindow(*app, hwnd);
+            // Anchor the IME composition/candidate window at the caret. The
+            // Home file-operation dialog owns it while its name field is open;
+            // otherwise the editor/search/table caret does.
+            if (app && msg == WM_IME_COMPOSITION &&
+                quickJumpImeComposition(*app, hwnd, lParam)) {
+                return 0;
+            }
+            if (app && quickJumpPositionImeWindow(*app, hwnd)) break;
+            if (app && msg == WM_IME_COMPOSITION &&
+                homeImeComposition(*app, hwnd, lParam)) {
+                return 0;
+            }
+            if (app && !homePositionImeWindow(*app, hwnd))
+                editorPositionImeWindow(*app, hwnd);
             break;
 
         case WM_DROPFILES:
@@ -1699,7 +1716,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_CONTEXTMENU:
             if (app) tabHoverCardDismiss(*app, hwnd);
+            if (app && app->quickJump.open) return 0;
             if (app) handleContextMenu(*app, hwnd, lParam);
+            return 0;
+
+        case WM_APP_QUICKJUMP_READY:
+            // Background workspace index finished (handler checks the scan
+            // generation before installing it).
+            if (app) quickJumpIndexReady(*app, hwnd);
             return 0;
 
         case WM_APP_DIR_SCAN:
@@ -2311,9 +2335,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // Set window title with filename
     updateWindowTitle(app);
 
-    // The startup document becomes the first (tabless) tab; a restored
-    // session rebuilds the whole row in its saved order
-    if (restoreSession && !app.currentFile.empty()) {
+    // Workspace launches keep a fixed Home tab at index 0 and restore the
+    // session's file tabs to its right. Document launches keep the old
+    // "startup document becomes the first tab" behaviour.
+    if (homeStartup) {
+        tabsSeedWorkspace(app, restoreSession ? sessionPaths
+                                              : std::vector<std::string>{});
+    } else if (restoreSession && !app.currentFile.empty()) {
         tabsSeedSession(app, sessionPaths);
     } else {
         tabsInit(app);

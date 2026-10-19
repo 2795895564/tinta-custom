@@ -87,6 +87,15 @@ int main() {
     check(std::wstring(tr(ko, "confirm.discard")) == L"\uBCC0\uACBD \uBC84\uB9AC\uAE30",
           "Korean discard confirmation");
 
+    // Quick Jump strings keep their format placeholders in every language
+    check(std::wstring(tr(zh, "quickjump.placeholder")) ==
+              L"\u8DF3\u8F6C\u5230\u6587\u4EF6\u6216\u6587\u4EF6\u5939\u2026",
+          "Chinese quick-jump placeholder");
+    for (int lang : {en, zh, ja, ko}) {
+        const wchar_t* fmt = tr(lang, "quickjump.error");
+        check(contains(fmt, L"%u"), "quickjump.error keeps %u");
+    }
+
     // Keys left out of the built-in table fall back to English
     check(std::wstring(tr(de, "title.no_file")) == L"Tinta",
           "untranslated key falls back to English");

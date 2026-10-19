@@ -2547,26 +2547,9 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             return;
         }
         // Dirty buffer: straight to the dialog, it is the guard (#106).
-        // Clean buffer: keep the documented double-Esc exit.
-        if (app.editorDirty) {
-            exitEditMode(app);
-            app.escPressedOnce = false;
-            return;
-        }
-        auto now = std::chrono::steady_clock::now();
-        if (app.escPressedOnce) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - app.lastEscTime).count();
-            if (elapsed < 500) {
-                exitEditMode(app);
-                app.escPressedOnce = false;
-                return;
-            }
-        }
-        app.escPressedOnce = true;
-        app.lastEscTime = now;
-        signalHintKey(app, SIGI_INFO, "toast.exit_confirm");
-        InvalidateRect(hwnd, nullptr, FALSE);
+        // Clean buffer: a single Esc returns to the reader (P1 decision).
+        exitEditMode(app);
+        app.escPressedOnce = false;
         return;
     }
     app.escPressedOnce = false;

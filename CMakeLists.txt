@@ -66,6 +66,10 @@ set(SOURCES
     src/mermaid_ext.cpp
     src/repos.cpp
     src/dirmodel.cpp
+    src/workspace_index.cpp
+    src/quickjump_logic.cpp
+    src/quickjump_indexer.cpp
+    src/quickjump.cpp
     src/home_logic.cpp
     src/homeview.cpp
     src/mermaid_seq.cpp
@@ -132,6 +136,10 @@ set(HEADERS
     include/plantuml_queue.h
     include/plantuml_app.h
     include/wordcount.h
+    include/workspace_index.h
+    include/quickjump_logic.h
+    include/quickjump_indexer.h
+    include/quickjump.h
 )
 
 # Windows resource file (icon)
@@ -140,7 +148,11 @@ set(RESOURCES
 )
 
 # Main executable
+# Validation can build beside a running user copy by overriding this name
+# (cmake -DTINTA_EXE_NAME=tinta-preview). The shipped default stays "tinta".
+set(TINTA_EXE_NAME "tinta" CACHE STRING "Output name for the Tinta executable")
 add_executable(tinta WIN32 ${SOURCES} ${HEADERS} ${RESOURCES})
+set_target_properties(tinta PROPERTIES OUTPUT_NAME "${TINTA_EXE_NAME}")
 
 target_include_directories(tinta PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -281,6 +293,25 @@ if(BUILD_TESTING)
     add_executable(home_logic_tests tests/home_logic_tests.cpp src/dirmodel.cpp src/home_logic.cpp)
     target_include_directories(home_logic_tests PRIVATE include)
     add_test(NAME home_logic COMMAND home_logic_tests)
+
+    add_executable(workspace_index_tests
+        tests/workspace_index_tests.cpp
+        src/workspace_index.cpp
+        src/dirmodel.cpp)
+    target_include_directories(workspace_index_tests PRIVATE include)
+    target_compile_definitions(workspace_index_tests PRIVATE UNICODE _UNICODE)
+    add_test(NAME workspace_index COMMAND workspace_index_tests)
+
+    add_executable(quickjump_tests
+        tests/quickjump_tests.cpp
+        src/quickjump_logic.cpp
+        src/quickjump_indexer.cpp
+        src/workspace_index.cpp
+        src/dirmodel.cpp)
+    target_include_directories(quickjump_tests PRIVATE include)
+    target_compile_definitions(quickjump_tests PRIVATE UNICODE _UNICODE)
+    target_link_libraries(quickjump_tests PRIVATE user32)
+    add_test(NAME quickjump COMMAND quickjump_tests)
 
     add_executable(repos_tests tests/repos_tests.cpp src/repos.cpp)
     target_include_directories(repos_tests PRIVATE include)

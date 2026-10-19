@@ -19,5 +19,13 @@ bool homeOnChar(App& app, HWND hwnd, wchar_t c);          // true = consumed
 bool homeOnMouseMove(App& app, HWND hwnd, int x, int y);  // true = hover changed
 bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y);
 void homeOnWheel(App& app, HWND hwnd, float notches);
+// Flush pending Home scan/open effects after a programmatic navigation.
+void homeRefresh(App& app, HWND hwnd);
+// Anchor the IME composition/candidate window at the Home dialog caret.
+// Returns false when no text dialog is open.
+bool homePositionImeWindow(App& app, HWND hwnd);
+// Consume an IME composition result into the Home dialog's name field.
+// Returns false when there is no Home name dialog to receive it.
+bool homeImeComposition(App& app, HWND hwnd, LPARAM lParam);
 bool homeOnDropFolder(App& app, HWND hwnd, const std::wstring& path);  // true = added as a repo
 void homeOnScanMessage(App& app, HWND hwnd, LPARAM lParam);

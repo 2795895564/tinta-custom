@@ -26,6 +26,7 @@
 #include "markdown.h"
 #include "keymap.h"
 #include "home_state.h"
+#include "quickjump.h"
 #include "repos.h"
 #include "plantuml.h"
 #include "plantuml_queue.h"
@@ -512,8 +513,9 @@ struct App {
     // View-mode scroll positions ride the existing reading-position memory.
     struct DocTab {
         int id = 0;                // stable identity across reorders/closes
+        bool home = false;         // index 0 workspace tab; never a document
         std::string path;          // empty = untitled quick note buffer
-        std::wstring title;        // display name (file name / Untitled)
+        std::wstring title;        // display name (file name / Home / Untitled)
         bool editMode = false;     // switched away while editing
         bool editorDirty = false;
         bool fileMissing = false;  // deleted/renamed on disk (red-grey dot)
@@ -1231,6 +1233,11 @@ struct App {
     // Cursor blink state, toggled by TIMER_CURSOR_BLINK (editor + search cursor)
     bool cursorBlinkOn = true;
 
+    // Ctrl+K command palette over the workspace index.
+    QuickJumpState quickJump;
+    workspace_index::Index quickJumpIndex;
+    std::unique_ptr<QuickJumpIndexer> quickJumpIndexer;
+
     // Search overlay
     bool showSearch = false;
     float searchAnimation = 0.0f;
@@ -1544,6 +1551,10 @@ struct App {
     }
 
     void shutdown() {
+        if (quickJumpIndexer) {
+            quickJumpIndexer->join();
+            quickJumpIndexer.reset();
+        }
         if (lightboxBitmap) {
             lightboxBitmap->Release();
             lightboxBitmap = nullptr;

@@ -1985,6 +1985,7 @@ void renderHelpOverlay(App& app) {
         {L"Ctrl+Shift+F", tr(app, "help.view.search_results")},
         {kBrowse.c_str(), tr(app, "help.view.folder_browser")},
         {kToc.c_str(),    tr(app, "help.view.toc")},
+        {L"Ctrl+K",       tr(app, "help.general.quick_jump")},
         {L"Ctrl+T",       tr(app, "help.view.new_tab")},
         {L"Ctrl+Tab",     tr(app, "help.view.next_tab")},
         {L"Ctrl+W / Ctrl+F4", tr(app, "help.view.close_tab")},
