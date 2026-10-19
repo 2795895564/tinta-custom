@@ -26,10 +26,14 @@ The footer shows `N selected` and `N copied` / `N cut`.
    status returns.
 4. Press `Ctrl+X` on `c.md`, go to `dest/`, press `Ctrl+V`. `c.md` disappears
    from the source and appears in `dest/`; the clipboard clears.
-5. Paste again with an existing name. It is skipped, not overwritten; the
-   footer reports a nonzero `skipped`.
-6. Try to copy/move a folder into itself or a descendant. It is skipped.
-7. Ctrl+C/X/V in the editor still operate on text; the file clipboard only
+5. Paste with an existing name. A `Name conflicts` card lists the colliding
+   names. `Skip` keeps the old files and pastes the rest; `Overwrite` replaces
+   same-named files.
+6. The two buttons have different colours (Skip neutral, Overwrite red) and
+   the focused one gets a clear ring. Left/Right/Tab switches; Enter confirms;
+   Esc cancels without pasting.
+7. Try to copy/move a folder into itself or a descendant. It is skipped.
+8. Ctrl+C/X/V in the editor still operate on text; the file clipboard only
    responds when Home's file list is the active surface.
 
 ## Automated evidence
@@ -52,7 +56,18 @@ The probe created `a.md`, `b.md`, `c.md`, copied `a/b` into `dest/`, then cut
 - Failures are counted in the footer; the rest are still removed.
 - Screenshots: `out/delete/01-selected.png`, `out/delete/02-confirm.png`.
 
+## Overwrite probe
+
+`out/conflict/`:
+
+- `01-conflict.png` — conflict card with `a.md`, Skip focused
+- `03-overwrite-selected.png` — Overwrite focused via Right
+- Skip kept `dest/a.md` as `OLD-A`; Overwrite changed it to `NEW-A`
+
+Folder merging on overwrite is intentionally not offered; conflicting folders
+are skipped.
+
 ## Remaining
 
-- Overwrite / rename-on-conflict is not offered; conflicts are skipped.
+- Folder overwrite is not offered (files only).
 - OS clipboard (`CF_HDROP`) interop is not wired yet.

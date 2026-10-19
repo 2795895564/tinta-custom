@@ -64,7 +64,14 @@ struct HomeColumnHit {
 
 // One small modal for Home file operations. Name dialogs keep a caret and
 // validate Windows file-name rules; confirm-delete has no text field.
-enum class HomeDialogKind { None, NewFile, NewFolder, Rename, ConfirmDelete };
+enum class HomeDialogKind {
+    None,
+    NewFile,
+    NewFolder,
+    Rename,
+    ConfirmDelete,
+    ConfirmPasteConflicts
+};
 enum class HomeDialogError { None, Empty, Invalid, Exists, Failed };
 
 struct HomeState {
@@ -87,6 +94,8 @@ struct HomeState {
     std::vector<std::wstring> clipboard;
     bool clipboardCut = false;
     bool pendingPaste = false;
+    std::vector<std::wstring> pasteConflicts;
+    int pasteConflictChoice = 0;  // 0 = skip, 1 = overwrite
 
     std::wstring query;
     bool searching = false;

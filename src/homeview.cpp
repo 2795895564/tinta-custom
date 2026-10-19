@@ -242,7 +242,8 @@ void relocateRepo(App& app, HWND hwnd, const std::string& id) {
 
 // After any state change: run the side effects the logic left behind
 // (dialogs, settings, scans, opening a file), then repaint
-void pasteClipboard(App& app, HWND hwnd);
+void pasteClipboard(App& app, HWND hwnd, bool overwrite);
+void preparePaste(App& app, HWND hwnd);
 
 void settle(App& app, HWND hwnd) {
     HomeState& H = app.home;
@@ -290,7 +291,7 @@ void settle(App& app, HWND hwnd) {
     }
     if (H.pendingPaste) {
         H.pendingPaste = false;
-        pasteClipboard(app, hwnd);
+        preparePaste(app, hwnd);
     }
     dispatchScans(app, hwnd);
     if (!H.pendingOpen.empty()) {
@@ -337,9 +338,16 @@ DWORD shellTransfer(const std::wstring& source, const std::wstring& target,
     return op.fAnyOperationsAborted ? ERROR_CANCELLED : 0;
 }
 
+bool isDirectoryPath(const std::wstring& path) {
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+           (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 // Ctrl+V: copy/move the internal clipboard into the current directory.
-// Existing names and folder-into-itself are skipped, never overwritten.
-void pasteClipboard(App& app, HWND hwnd) {
+// Folder-into-itself is always skipped. Existing names are skipped unless the
+// user explicitly chose Overwrite (files only; folder merging is not offered).
+void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     HomeState& H = app.home;
     if (H.clipboard.empty() || H.dir.empty()) return;
     const std::wstring dir = H.dir;
@@ -348,10 +356,32 @@ void pasteClipboard(App& app, HWND hwnd) {
     for (const auto& source : H.clipboard) {
         std::wstring target = dirmodel::join(dir, dirmodel::leafOf(source));
         const bool same = _wcsicmp(source.c_str(), target.c_str()) == 0;
-        if (!pathExists(source) || same || pathExists(target) ||
-            dirmodel::isInside(source, dir)) {
+        if (!pathExists(source) || same || dirmodel::isInside(source, dir)) {
             skipped++;
             if (H.clipboardCut) remaining.push_back(source);
+            continue;
+        }
+        if (pathExists(target)) {
+            if (!overwrite || isDirectoryPath(source) ||
+                isDirectoryPath(target)) {
+                skipped++;
+                if (H.clipboardCut) remaining.push_back(source);
+                continue;
+            }
+            bool ok = false;
+            if (H.clipboardCut) {
+                ok = MoveFileExW(source.c_str(), target.c_str(),
+                                 MOVEFILE_REPLACE_EXISTING |
+                                     MOVEFILE_COPY_ALLOWED) != 0;
+            } else {
+                ok = CopyFileW(source.c_str(), target.c_str(), FALSE) != 0;
+            }
+            if (!ok) {
+                failed++;
+                remaining.push_back(source);
+            } else {
+                pasted++;
+            }
             continue;
         }
         if (shellTransfer(source, target, H.clipboardCut)) {
@@ -374,6 +404,32 @@ void pasteClipboard(App& app, HWND hwnd) {
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// A plain Ctrl+V with existing names asks first. With no conflicts it is the
+// old direct paste.
+void preparePaste(App& app, HWND hwnd) {
+    HomeState& H = app.home;
+    H.pasteConflicts.clear();
+    if (H.clipboard.empty() || H.dir.empty()) return;
+    for (const auto& source : H.clipboard) {
+        if (!pathExists(source)) continue;
+        std::wstring target =
+            dirmodel::join(H.dir, dirmodel::leafOf(source));
+        // Folder merging is not offered, so only file/file collisions ask.
+        if (pathExists(target) && !isDirectoryPath(source) &&
+            !isDirectoryPath(target))
+            H.pasteConflicts.push_back(dirmodel::leafOf(source));
+    }
+    if (H.pasteConflicts.empty()) {
+        pasteClipboard(app, hwnd, false);
+        return;
+    }
+    H.dialog = HomeDialogKind::ConfirmPasteConflicts;
+    H.pasteConflictChoice = 0;
+    H.dialogError = HomeDialogError::None;
+    H.dialogErrorCode = 0;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 // Runs the modal's pending action. On success the dialog closes and the
 // active directory rescans; on failure the dialog stays open with an error.
 void homeCommitDialog(App& app, HWND hwnd) {
@@ -387,6 +443,12 @@ void homeCommitDialog(App& app, HWND hwnd) {
         InvalidateRect(hwnd, nullptr, FALSE);
     };
 
+    if (H.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+        const int choice = H.pasteConflictChoice;
+        homeDialogClose(H);
+        pasteClipboard(app, hwnd, choice == 1);
+        return;
+    }
     if (H.dialog == HomeDialogKind::ConfirmDelete) {
         if (H.dialogTargets.size() > 1) {
             unsigned deleted = 0, failed = 0;
@@ -917,7 +979,22 @@ bool homeOnChar(App& app, HWND hwnd, wchar_t c) {
     return handled;
 }
 
-bool homeOnMouseMove(App& app, HWND, int x, int y) {
+bool homeOnMouseMove(App& app, HWND hwnd, int x, int y) {
+    if (app.home.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+        x -= (int)documentViewportX(app);
+        HomeState& H = app.home;
+        auto in = [&](const HomeRect& r) {
+            return x >= r.l && x < r.r && y >= r.t && y < r.b;
+        };
+        int choice = H.pasteConflictChoice;
+        if (in(H.dialogPrimaryHit)) choice = 1;
+        else if (in(H.dialogCancelHit)) choice = 0;
+        if (choice != H.pasteConflictChoice) {
+            H.pasteConflictChoice = choice;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return true;
+    }
     if (app.home.dialog != HomeDialogKind::None) return false;
     x -= (int)documentViewportX(app);  // rects are recorded in the translated space
     int hoverColumn = -1, hoverRow = -1;
@@ -967,6 +1044,19 @@ bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y) {
         return true;
     }
 
+    if (H.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+        if (in(H.dialogPrimaryHit)) {
+            H.pasteConflictChoice = 1;  // Overwrite
+            H.dialogCommit = true;
+            homeCommitDialog(app, hwnd);
+        } else if (in(H.dialogCancelHit)) {
+            H.pasteConflictChoice = 0;  // Skip
+            H.dialogCommit = true;
+            homeCommitDialog(app, hwnd);
+        }
+        settle(app, hwnd);
+        return true;
+    }
     if (H.dialog != HomeDialogKind::None) {
         if (in(H.dialogPrimaryHit)) {
             H.dialogCommit = true;
@@ -1146,8 +1236,11 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     if (H.dialog == HomeDialogKind::None) return;
     const D2DTheme& th = app.theme;
     const bool confirm = H.dialog == HomeDialogKind::ConfirmDelete;
+    const bool pasteConflict =
+        H.dialog == HomeDialogKind::ConfirmPasteConflicts;
     const float cardW = std::min(dpi(app, 460), W - dpi(app, 56));
-    const float cardH = dpi(app, confirm ? 186.0f : 224.0f);
+    const float cardH =
+        dpi(app, pasteConflict ? 340.0f : confirm ? 186.0f : 224.0f);
     const float cardX = (W - cardW) / 2.0f;
     const float cardY = top + std::max(dpi(app, 24), (bottom - top - cardH) / 2.0f);
     const float pad = dpi(app, 20);
@@ -1160,7 +1253,8 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
                 cardY + cardH - 0.5f, radius, withAlpha(th.accent, 0.42f), 1.0f);
 
     const wchar_t* title =
-        H.dialog == HomeDialogKind::NewFile ? tr(app, "home.new_file")
+        pasteConflict ? tr(app, "home.paste_conflict_title")
+        : H.dialog == HomeDialogKind::NewFile ? tr(app, "home.new_file")
         : H.dialog == HomeDialogKind::NewFolder ? tr(app, "home.new_folder")
         : H.dialog == HomeDialogKind::Rename ? tr(app, "home.rename")
                                              : tr(app, "home.delete");
@@ -1176,7 +1270,29 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     H.dialogCancelHit = HomeRect{cancelX, buttonsY, cancelX + cancelW,
                                 buttonsY + dpi(app, 30)};
 
-    if (confirm) {
+    if (pasteConflict) {
+        const float listTop = cardY + dpi(app, 50);
+        const float lineH = dpi(app, 20);
+        const int maxLines = 8;
+        const int shown = std::min(maxLines, (int)H.pasteConflicts.size());
+        for (int i = 0; i < shown; i++) {
+            text(app, fm.mono, H.pasteConflicts[i], cardX + pad + dpi(app, 10),
+                 listTop + lineH * i, cardW - 2 * pad - dpi(app, 20), lineH,
+                 th.text);
+        }
+        if ((int)H.pasteConflicts.size() > shown) {
+            wchar_t more[64];
+            swprintf_s(more, _countof(more), tr(app, "home.paste_conflict_more"),
+                       (unsigned)(H.pasteConflicts.size() - shown));
+            text(app, fm.caption, more, cardX + pad + dpi(app, 10),
+                 listTop + lineH * shown, cardW - 2 * pad, lineH,
+                 withAlpha(th.text, 0.55f));
+        }
+        text(app, fm.caption, tr(app, "home.paste_conflict_hint"), cardX + pad,
+             buttonsY - dpi(app, 30), cardW - 2 * pad, dpi(app, 24),
+             withAlpha(th.text, 0.52f));
+        H.dialogFieldHit = HomeRect{};
+    } else if (confirm) {
         wchar_t message[512];
         if (H.dialogTargets.size() > 1)
             swprintf_s(message, _countof(message), tr(app, "home.delete_confirm_many"),
@@ -1238,27 +1354,48 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     }
 
     const wchar_t* primary =
-        confirm ? tr(app, "home.delete")
+        pasteConflict ? tr(app, "home.paste_overwrite")
+        : confirm ? tr(app, "home.delete")
         : H.dialog == HomeDialogKind::Rename ? tr(app, "home.rename")
                                              : tr(app, "home.create");
     const D2D1_COLOR_F primaryColor =
-        confirm ? D2D1::ColorF(0.78f, 0.38f, 0.34f) : th.accent;
+        (confirm || pasteConflict) ? D2D1::ColorF(0.78f, 0.38f, 0.34f)
+                                   : th.accent;
+    if (pasteConflict && H.pasteConflictChoice == 0) {
+        fillRound(app, cancelX, buttonsY, cancelX + cancelW,
+                  buttonsY + dpi(app, 30), dpi(app, 6),
+                  mix(th.background, th.accent, 0.16f));
+    }
     fillRound(app, primaryX, buttonsY, primaryX + primaryW,
               buttonsY + dpi(app, 30), dpi(app, 6), primaryColor);
     strokeRound(app, cancelX + 0.5f, buttonsY + 0.5f, cancelX + cancelW - 0.5f,
                 buttonsY + dpi(app, 30) - 0.5f, dpi(app, 6),
                 withAlpha(th.text, 0.22f), 1.0f);
+    if (pasteConflict) {
+        const float focusX =
+            H.pasteConflictChoice == 1 ? primaryX : cancelX;
+        const float focusW =
+            H.pasteConflictChoice == 1 ? primaryW : cancelW;
+        strokeRound(app, focusX - dpi(app, 2), buttonsY - dpi(app, 2),
+                    focusX + focusW + dpi(app, 2),
+                    buttonsY + dpi(app, 30) + dpi(app, 2), dpi(app, 8),
+                    withAlpha(th.accent, 0.95f), 2.0f);
+    }
     text(app, fm.button, primary, primaryX, buttonsY, primaryW, dpi(app, 30),
          th.background);
-    text(app, fm.button, tr(app, "home.cancel"), cancelX, buttonsY, cancelW,
-         dpi(app, 30), withAlpha(th.text, 0.78f));
+    text(app, fm.button, pasteConflict ? tr(app, "home.paste_skip")
+                                       : tr(app, "home.cancel"),
+         cancelX, buttonsY, cancelW, dpi(app, 30),
+         withAlpha(th.text, pasteConflict && H.pasteConflictChoice == 0 ? 0.95f
+                                                                       : 0.78f));
 }
 
 void renderHome(App& app) {
     HomeState& H = app.home;
     H.rowHits.clear();
     H.columnHits.clear();
-    if (H.dialog != HomeDialogKind::ConfirmDelete) {
+    if (H.dialog != HomeDialogKind::ConfirmDelete &&
+        H.dialog != HomeDialogKind::ConfirmPasteConflicts) {
         H.dialogPrimaryHit = HomeRect{};
         H.dialogCancelHit = HomeRect{};
     }
@@ -1612,7 +1749,8 @@ void renderHome(App& app) {
         text(app, fm.caption, info, pad, bodyBottom, std::max(0.0f, infoW), ftrH,
              infoColor);
     }
-    if (H.dialog == HomeDialogKind::ConfirmDelete)
+    if (H.dialog == HomeDialogKind::ConfirmDelete ||
+        H.dialog == HomeDialogKind::ConfirmPasteConflicts)
         renderHomeDialog(app, H, fm, W, top, bottom);
     fm.release();
 }

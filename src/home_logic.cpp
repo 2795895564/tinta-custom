@@ -170,6 +170,21 @@ bool dialogKey(HomeState& s, unsigned vk) {
         if (vk == 0x1B || vk == 'N') { homeDialogClose(s); return true; }
         return true;  // modal: swallow everything else
     }
+    if (s.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+        if (vk == 0x1B) { homeDialogClose(s); return true; }  // cancel, no paste
+        if (vk == 0x25 || vk == 0x27 || vk == 0x09) {
+            s.pasteConflictChoice ^= 1;
+            return true;
+        }
+        if (vk == 0x0D) { s.dialogCommit = true; return true; }
+        if (vk == 'O') { s.pasteConflictChoice = 1; s.dialogCommit = true; return true; }
+        if (vk == 'S' || vk == 'N') {
+            s.pasteConflictChoice = 0;
+            s.dialogCommit = true;
+            return true;
+        }
+        return true;  // modal: swallow everything else
+    }
     if (vk == 0x1B) { homeDialogClose(s); return true; }
     if (vk == 0x0D) {
         if (s.dialogText.empty()) {
@@ -226,6 +241,8 @@ void homeDialogClose(HomeState& s) {
     s.dialogText.clear();
     s.dialogOriginal.clear();
     s.dialogTargets.clear();
+    s.pasteConflicts.clear();
+    s.pasteConflictChoice = 0;
     s.dialogParent.clear();
     s.dialogCaret = 0;
     s.dialogError = HomeDialogError::None;
