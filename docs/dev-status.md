@@ -41,6 +41,7 @@
 | D12 | P3 仓库重定位与启动仓库 | `[已验证]` | Picker 选中 `folder missing` 行按 `r` 重定位；按 `d` 把选中仓库设为启动仓库；保留 id/name，重复路径和缺失仓库拒绝 | `home_logic_tests`；用户手工重定位通过；默认仓库写入 settings 并显示 default 标记 |
 | D13 | P3 移除仓库二次确认 | `[已验证]` | `x`/Delete 第一次只提示，同一行再按一次才遗忘；移动/打开/点击会取消确认 | `home_logic_tests` 覆盖首次 arm 与二次 remove |
 | D14 | Home 内联新建/重命名 | `[已验证]` | 新建文件/文件夹在列表顶部显示临时行；重命名在行内编辑；Enter 提交、Esc 取消；删除仍用确认框 | 探针验证新建/重命名/取消；`out/inline/*.png` |
+| D15 | Home 剪贴板模型 | `[已验证]` | `Ctrl+A` 选全列，`Ctrl+C/X` 复制/剪切选中项，`Ctrl+V` 粘贴到当前目录；同名默认跳过、不覆盖；移动文件夹禁止进入自身 | `home_logic_tests`；探针验证复制、剪切与冲突跳过；`out/clipboard/*.png` |
 
 ## C. 提案 / 待决定
 
@@ -83,6 +84,7 @@
 | V16 | P3 启动仓库 | `[已验证]` | Picker 按 `d` → currentRepoId=选中、startupMode=last、settings 落盘、行尾显示 default；缺失行拒绝 | 探针读取 settings：`repoCurrent=r1`、`startupMode=0`；`out/repo-default/*.png` |
 | V17 | P3 移除仓库二次确认 | `[已验证]` | `x` 第一次提示 “Press X again…”，第二次才 forget；不改磁盘文件夹 | `home_logic_tests` 通过 |
 | V18 | Home 内联编辑 | `[已验证]` | 新建临时行、原地重命名、Enter/Esc、错误底部提示、取消不落盘 | `out/inline/01-03*.png`；探针检查文件系统结果 |
+| V19 | Home 剪贴板 | `[已验证]` | Ctrl+A 全选、Ctrl+C/X 复制/剪切、Ctrl+V 粘贴、同名跳过、剪切后源消失 | `out/clipboard/*.png`；探针检查磁盘文件 |
 
 ## F. 环境限制
 
@@ -107,3 +109,4 @@
 - 2026-10-20：P3 完成——Picker 按 `d` 设为启动仓库（currentRepoId + startupMode=last），行尾显示 `default`；缺失仓库拒绝。`home_logic_tests` 通过；探针确认 settings 与默认标记。用户已手工验收重定位。
 - 2026-10-20：P3 收尾——`x`/Delete 移除仓库改为二次确认，首次只提示且移动/打开/点击会取消；`home_logic_tests` 通过。
 - 2026-10-20：Home 新建/重命名改为内联编辑：新建在列表顶部显示临时行，重命名在行内替换名字；Enter 提交、Esc 取消，错误显示在底部；删除仍保留确认框。探针验证新建/重命名/取消与磁盘结果。
+- 2026-10-20：Home 剪贴板模型：Ctrl+A 全选、Ctrl+C/X 复制/剪切、Ctrl+V 粘贴；同名跳过不覆盖，剪切成功后清空剪贴板，跨目录/文件夹由 SHFileOperation 处理。探针验证复制 2 个文件、剪切 1 个文件。

@@ -242,6 +242,8 @@ void relocateRepo(App& app, HWND hwnd, const std::string& id) {
 
 // After any state change: run the side effects the logic left behind
 // (dialogs, settings, scans, opening a file), then repaint
+void pasteClipboard(App& app, HWND hwnd);
+
 void settle(App& app, HWND hwnd) {
     HomeState& H = app.home;
     if (H.refreshRows) {
@@ -286,6 +288,10 @@ void settle(App& app, HWND hwnd) {
         H.pendingRemove.clear();
         forgetRepo(app, id);
     }
+    if (H.pendingPaste) {
+        H.pendingPaste = false;
+        pasteClipboard(app, hwnd);
+    }
     dispatchScans(app, hwnd);
     if (!H.pendingOpen.empty()) {
         std::wstring path = std::move(H.pendingOpen);
@@ -312,6 +318,60 @@ DWORD recyclePath(const std::wstring& path) {
     int result = SHFileOperationW(&op);
     if (result != 0) return (DWORD)result;
     return op.fAnyOperationsAborted ? ERROR_CANCELLED : 0;
+}
+
+DWORD shellTransfer(const std::wstring& source, const std::wstring& target,
+                    bool move) {
+    std::wstring from = source;
+    from.push_back(L'\0');
+    std::wstring to = target;
+    to.push_back(L'\0');
+    SHFILEOPSTRUCTW op{};
+    op.wFunc = move ? FO_MOVE : FO_COPY;
+    op.pFrom = from.c_str();
+    op.pTo = to.c_str();
+    op.fFlags = FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI |
+                FOF_NOCONFIRMMKDIR;
+    int result = SHFileOperationW(&op);
+    if (result != 0) return (DWORD)result;
+    return op.fAnyOperationsAborted ? ERROR_CANCELLED : 0;
+}
+
+// Ctrl+V: copy/move the internal clipboard into the current directory.
+// Existing names and folder-into-itself are skipped, never overwritten.
+void pasteClipboard(App& app, HWND hwnd) {
+    HomeState& H = app.home;
+    if (H.clipboard.empty() || H.dir.empty()) return;
+    const std::wstring dir = H.dir;
+    std::vector<std::wstring> remaining;
+    unsigned pasted = 0, skipped = 0, failed = 0;
+    for (const auto& source : H.clipboard) {
+        std::wstring target = dirmodel::join(dir, dirmodel::leafOf(source));
+        const bool same = _wcsicmp(source.c_str(), target.c_str()) == 0;
+        if (!pathExists(source) || same || pathExists(target) ||
+            dirmodel::isInside(source, dir)) {
+            skipped++;
+            if (H.clipboardCut) remaining.push_back(source);
+            continue;
+        }
+        if (shellTransfer(source, target, H.clipboardCut)) {
+            failed++;
+            remaining.push_back(source);
+        } else {
+            pasted++;
+        }
+    }
+    if (H.clipboardCut) H.clipboard = std::move(remaining);
+    if (pasted) {
+        homeNavigate(H, dir, L"");
+    } else {
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    wchar_t message[256];
+    swprintf_s(message, _countof(message), tr(app, "home.paste_result"),
+               pasted, skipped, failed);
+    H.fileNotice = message;
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // Runs the modal's pending action. On success the dialog closes and the
@@ -1459,6 +1519,9 @@ void renderHome(App& app) {
     if (!H.repoNotice.empty()) {
         text(app, fm.caption, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
+    } else if (!H.fileNotice.empty()) {
+        text(app, fm.caption, H.fileNotice, pad, bodyBottom, W - 2 * pad, ftrH,
+             withAlpha(th.accent, 0.82f));
     } else {
         std::wstring info;
         D2D1_COLOR_F infoColor = withAlpha(th.text, 0.68f);
@@ -1499,6 +1562,15 @@ void renderHome(App& app) {
             info = e->kind == Kind::Folder
                        ? e->name + L"  \x00B7  " + tr(app, "home.folder")
                        : e->name + L"  \x00B7  " + dirmodel::formatSize(e->size);
+        }
+        if (!inlineEdit && !H.clipboard.empty()) {
+            wchar_t clip[64];
+            swprintf_s(clip, _countof(clip),
+                       tr(app, H.clipboardCut ? "home.clipboard_cut"
+                                              : "home.clipboard_copy"),
+                       (unsigned)H.clipboard.size());
+            if (!info.empty()) info += L"  \x00B7  ";
+            info += clip;
         }
         const std::wstring hints = tr(app, "home.footer");
         const float hintW = measureText(app, hints, fm.right) + dpi(app, 6);

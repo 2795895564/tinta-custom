@@ -119,6 +119,16 @@ int main() {
     CHECK(homeSelectionCount(s) == 0);
     land(s, kHomeCurrent, L(L"C:\\notes\\proj",
                             {E(L"a.md", Kind::Document), E(L"c.md", Kind::Document)}));
+    CHECK(homeKey(s, 'A', true, false) && homeSelectionCount(s) == 2);
+    CHECK(homeKey(s, 'C', true, false) && s.clipboard.size() == 2 &&
+          !s.clipboardCut);
+    CHECK(homeKey(s, 'X', true, false) && s.clipboard.size() == 2 &&
+          s.clipboardCut);
+    CHECK(homeKey(s, 'V', true, false) && s.pendingPaste);
+    s.pendingPaste = false;
+    s.clipboard.clear();
+    s.clipboardCut = false;
+    s.selected.clear();
 
     // search typing is swallowed from shortcuts; '/' echo is dropped
     CHECK(homeKey(s, 0xBF, false, false) && s.searching);

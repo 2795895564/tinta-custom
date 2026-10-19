@@ -82,6 +82,11 @@ struct HomeState {
     int visibleRows = 20;   // written by the renderer each frame
     // Multi-select for the active directory: lowercase names survive rescans.
     std::set<std::wstring> selected;
+    // Internal file clipboard: absolute source paths, cut flag, and the shell
+    // effect requested by Ctrl+V.
+    std::vector<std::wstring> clipboard;
+    bool clipboardCut = false;
+    bool pendingPaste = false;
 
     std::wstring query;
     bool searching = false;
@@ -116,6 +121,7 @@ struct HomeState {
     std::vector<RepoRow> repoRows;
     int repoSel = 0;
     std::wstring repoNotice;
+    std::wstring fileNotice;  // transient success/info from file operations
     bool refreshRows = false;
     bool pendingBrowse = false;
     std::string pendingChoose, pendingRemove, pendingRelocate, pendingDefault;

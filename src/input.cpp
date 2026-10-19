@@ -3731,6 +3731,16 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         InvalidateRect(hwnd, nullptr, FALSE);
         return false;  // punctuation Help bindings still need WM_CHAR
     }
+    // Home owns Ctrl+A/C/X/V while its file list is the active surface.
+    // Without this, the reader's document-wide Ctrl+A wins and Home never
+    // sees the select-all / clipboard command.
+    if (ctrl && (wParam == 'A' || wParam == 'C' || wParam == 'X' ||
+                 wParam == 'V') &&
+        homeActive(app) && app.home.screen == HomeScreen::Home &&
+        app.home.dialog == HomeDialogKind::None && !app.home.searching &&
+        !app.editMode && !app.showSearch && !app.confirmExitPending) {
+        if (homeOnKeyDown(app, hwnd, wParam)) return true;
+    }
     // Ctrl+K opens the palette from Home, reading and editing. It is fixed
     // (not in the remappable key table) and never steals a modal/overlay.
     if (ctrl && wParam == 'K' && !app.confirmExitPending && !app.showSearch &&

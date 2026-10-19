@@ -232,6 +232,7 @@ void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& sel
     if (s.root.empty() || !isInside(s.root, dir)) return;
     homeDialogClose(s);  // any explicit navigation leaves the modal
     s.dir = dir;
+    s.fileNotice.clear();
     s.query.clear();
     s.searching = false;
     s.restoreName = select;
@@ -400,6 +401,25 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             if (idx >= 0 && idx < (int)s.current.entries.size())
                 s.selected.insert(lower(s.current.entries[idx].name));
         }
+        return true;
+    }
+    if (ctrl && (vk == 'C' || vk == 'X') && !s.searching) {
+        s.clipboard.clear();
+        if (!s.selected.empty()) {
+            for (int idx : s.view) {
+                if (idx < 0 || idx >= (int)s.current.entries.size()) continue;
+                const Entry& e = s.current.entries[idx];
+                if (s.selected.find(lower(e.name)) != s.selected.end())
+                    s.clipboard.push_back(join(s.dir, e.name));
+            }
+        } else if (const Entry* e = homeSelected(s)) {
+            s.clipboard.push_back(join(s.dir, e->name));
+        }
+        s.clipboardCut = (vk == 'X');
+        return true;
+    }
+    if (ctrl && vk == 'V' && !s.searching) {
+        if (!s.clipboard.empty()) s.pendingPaste = true;
         return true;
     }
     if (ctrl) return false;  // Ctrl chords stay with the app
