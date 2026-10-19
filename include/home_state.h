@@ -143,6 +143,7 @@ struct HomeState {
     int repoSel = 0;
     std::wstring repoNotice;
     std::wstring fileNotice;  // transient success/info from file operations
+    unsigned long long fileNoticeUntil = 0;  // GetTickCount64 deadline
     bool refreshRows = false;
     bool pendingBrowse = false;
     std::string pendingChoose, pendingRemove, pendingRelocate, pendingDefault;

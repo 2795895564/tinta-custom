@@ -352,6 +352,13 @@ bool isDirectoryPath(const std::wstring& path) {
 // Ctrl+V: copy/move the internal clipboard into the current directory.
 // Folder-into-itself is always skipped. Existing names are skipped unless the
 // user explicitly chose Overwrite (files only; folder merging is not offered).
+void setFileNotice(App& app, HWND hwnd, std::wstring text) {
+    app.home.fileNotice = std::move(text);
+    app.home.fileNoticeUntil = GetTickCount64() + 4000;
+    SetTimer(hwnd, TIMER_HOME_NOTICE, 250, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     HomeState& H = app.home;
     if (H.clipboard.empty() || H.dir.empty()) return;
@@ -416,8 +423,7 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     wchar_t message[256];
     swprintf_s(message, _countof(message), tr(app, "home.paste_result"),
                pasted, skipped, failed);
-    H.fileNotice = message;
-    InvalidateRect(hwnd, nullptr, FALSE);
+    setFileNotice(app, hwnd, message);
 }
 
 // Ctrl+Z: put the last moved items back, or recycle the last copied items.
@@ -425,7 +431,7 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
 void undoLastTransfer(App& app, HWND hwnd) {
     HomeState& H = app.home;
     if (H.undoTransfers.empty()) {
-        H.fileNotice = tr(app, "home.undo_none");
+        setFileNotice(app, hwnd, tr(app, "home.undo_none"));
         InvalidateRect(hwnd, nullptr, FALSE);
         return;
     }
@@ -457,8 +463,7 @@ void undoLastTransfer(App& app, HWND hwnd) {
     wchar_t message[256];
     swprintf_s(message, _countof(message),
                tr(app, move ? "home.undo_move" : "home.undo_copy"), ok, failed);
-    H.fileNotice = message;
-    InvalidateRect(hwnd, nullptr, FALSE);
+    setFileNotice(app, hwnd, message);
 }
 
 // A plain Ctrl+V with existing names asks first. With no conflicts it is the
@@ -524,7 +529,7 @@ void homeCommitDialog(App& app, HWND hwnd) {
             } else {
                 swprintf_s(message, _countof(message),
                            tr(app, "home.delete_result"), deleted);
-                H.fileNotice = message;
+                setFileNotice(app, hwnd, message);
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return;

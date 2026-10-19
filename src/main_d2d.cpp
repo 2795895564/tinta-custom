@@ -1649,6 +1649,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 app->cursorBlinkOn = !app->cursorBlinkOn;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            if (wParam == TIMER_HOME_NOTICE && app) {
+                const bool expired =
+                    !app->home.fileNotice.empty() &&
+                    GetTickCount64() >= app->home.fileNoticeUntil;
+                if (app->home.fileNotice.empty() || expired) {
+                    app->home.fileNotice.clear();
+                    app->home.fileNoticeUntil = 0;
+                    KillTimer(hwnd, TIMER_HOME_NOTICE);
+                    if (expired) InvalidateRect(hwnd, nullptr, FALSE);
+                }
+            }
             if (wParam == TIMER_NOTIFICATION && app) {
                 // Only draining chips and the Read button's fade need
                 // repaints; prompts are static until answered
@@ -1812,6 +1823,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             KillTimer(hwnd, 2); // TIMER_EDITOR_REPARSE
             KillTimer(hwnd, TIMER_CURSOR_BLINK);
             KillTimer(hwnd, TIMER_NOTIFICATION);
+            KillTimer(hwnd, TIMER_HOME_NOTICE);
             KillTimer(hwnd, TIMER_ZOOM_APPLY);
             KillTimer(hwnd, TIMER_DRAFT_SAVE);
             // Join the PlantUML worker and delete every unadopted work dir

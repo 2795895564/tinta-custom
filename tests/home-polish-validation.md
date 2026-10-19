@@ -52,6 +52,15 @@ Screenshots live in `out/polish/`.
 - Screenshots: `out/dialog2/01-delete-focused.png`,
   `02-cancel-focused.png`.
 
+## Notice timing
+
+- Pasting a file shows `Pasted 1 · skipped 0 · failed 0` in the footer.
+- After about four seconds the notice disappears and the footer returns to the
+  selected item / clipboard summary.
+- Pressing any command key clears a success notice immediately.
+- Error notices (`repoNotice`) still stay until the next state change.
+- Screenshots: `out/notice/01-notice.png`, `02-cleared.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the

@@ -51,6 +51,7 @@ inline int64_t usElapsed(Clock::time_point start) {
 #define TIMER_UPDATE_CHECK 10
 #define TIMER_SIDE_PANEL_SCROLLBARS 12
 #define TIMER_TAB_HOVER_CARD 13
+#define TIMER_HOME_NOTICE 14
 
 // Posted to continue an incomplete document layout in time-budgeted chunks
 #define WM_APP_LAYOUT_CHUNK (WM_APP + 1)
