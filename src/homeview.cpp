@@ -1598,7 +1598,8 @@ void renderHome(App& app) {
     const bool showMeta = colW > dpi(app, 360);
     const float metaW = showMeta ? sizeW + whenW + dpi(app, 20) : 0.0f;
     const float nameW =
-        std::max(dpi(app, 24), colW - pad - rightPad - leadW - metaW);
+        std::max(dpi(app, 24),
+                 colW - pad - rightPad - leadW - metaW - dpi(app, 8));
 
     for (int ci = 0; ci < count; ci++) {
         const ColRef& col = cols[ci];

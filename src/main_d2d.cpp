@@ -1191,6 +1191,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     App* app = g_app;
 
     switch (msg) {
+        case WM_GETMINMAXINFO: {
+            // Below this the Miller columns and the footer stop being usable.
+            if (!app) break;
+            MINMAXINFO* info = reinterpret_cast<MINMAXINFO*>(lParam);
+            info->ptMinTrackSize.x = (LONG)dpi(*app, 520);
+            info->ptMinTrackSize.y = (LONG)dpi(*app, 420);
+            return 0;
+        }
         case WM_NCCALCSIZE: {
             // Reclaim the caption: the title bar becomes the tab strip.
             // DefWindowProc computes the resize borders, then the top edge

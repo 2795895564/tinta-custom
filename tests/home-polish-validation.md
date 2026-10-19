@@ -31,9 +31,18 @@ Screenshots live in `out/polish/`.
 - Point the folder at a path that cannot be listed.
 - The column says `Can't read this folder` instead of looking empty.
 
+## Long names and narrow windows
+
+- A 60+ character file name and a long folder name ellipsize before the size
+  and time columns; they do not overlap or push metadata off the column.
+- At 520 DIP the metadata columns remain readable; the footer shows the full
+  selected name, trimming only at the edge.
+- Trying to resize to 400px stops at the 520×420 DIP minimum.
+- Screenshots: `out/longname/01-normal.png`, `02-narrow.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the
   primary state.
-- Long names rely on DirectWrite trimming; they were not re-tested at narrow
-  widths in this pass.
+- There is no hover tooltip for a truncated name; the footer and rename field
+  are the full-name views.
