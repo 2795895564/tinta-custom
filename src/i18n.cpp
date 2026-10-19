@@ -392,6 +392,8 @@ const Entry kEntries[] = {
     { "home.footer_selected", L"Ctrl+C copy  Ctrl+X cut  D delete  Esc clear", L"Ctrl+C 复制  Ctrl+X 剪切  D 删除  Esc 清除", L"Ctrl+C コピー  Ctrl+X 切り取り  D 削除  Esc クリア", L"Ctrl+C 복사  Ctrl+X 잘라내기  D 삭제  Esc 지우기" },
     { "home.footer_clipboard", L"Ctrl+V paste  Ctrl+Z undo", L"Ctrl+V 粘贴  Ctrl+Z 撤销", L"Ctrl+V 貼り付け  Ctrl+Z 元に戻す", L"Ctrl+V 붙여넣기  Ctrl+Z 실행 취소" },
     { "home.empty_folder", L"Empty folder", L"空文件夹", L"空のフォルダー", L"빈 폴더" },
+    { "home.loading", L"Loading\x2026", L"正在加载\x2026", L"読み込み中\x2026", L"불러오는 중\x2026" },
+    { "home.stale_folder", L"Couldn't refresh  ·  showing the last loaded contents", L"无法刷新  ·  显示上次加载的内容", L"更新できません  ·  前回の内容を表示中", L"새로 고칠 수 없음  ·  마지막 내용 표시 중" },
     { "home.no_matches", L"No matches", L"没有匹配项", L"一致する項目なし", L"일치 항목 없음" },
     { "home.read_failed", L"Can't read this folder", L"无法读取此文件夹", L"このフォルダーを読み取れません", L"이 폴더를 읽을 수 없습니다" },
     { "home.empty_hint", L"n new file", L"n 新建文件", L"n 新規ファイル", L"n 새 파일" },

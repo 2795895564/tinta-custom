@@ -144,6 +144,7 @@ struct HomeState {
     std::wstring repoNotice;
     std::wstring fileNotice;  // transient success/info from file operations
     unsigned long long fileNoticeUntil = 0;  // GetTickCount64 deadline
+    bool currentStale = false;  // refresh failed; last good listing is shown
     std::wstring watchedDir;  // directory whose write time we last saw
     unsigned long long watchedDirTime = 0;
     bool refreshRows = false;

@@ -291,6 +291,7 @@ void homeNavigate(HomeState& s, const std::wstring& dir, const std::wstring& sel
     s.current = Listing{};
     s.view.clear();
     s.selected.clear();  // selection belongs to the directory being left
+    s.currentStale = false;
     s.sel = s.topRow = 0;
     s.loading = true;
     clearPreview(s);
@@ -316,6 +317,14 @@ void homeApplyListing(HomeState& s, int slot, uint32_t gen, Listing&& l) {
         s.parent = std::move(l);
     } else if (slot == kHomeCurrent) {
         if (l.path != s.dir) return;
+        // A failed refresh must not wipe a list that was readable a moment
+        // ago; keep it on screen and say it is stale.
+        if (!l.ok && !s.current.entries.empty()) {
+            s.currentStale = true;
+            s.loading = false;
+            return;
+        }
+        s.currentStale = false;
         sortEntries(l.entries, s.opts);
         s.current = std::move(l);
         s.loading = false;

@@ -72,6 +72,12 @@ int main() {
     CHECK(s.view.empty());  // stale generation ignored
     land(s, kHomeCurrent, L(L"C:\\notes", {E(L"x.md", Kind::Document), E(L"proj", Kind::Folder), E(L"y.png", Kind::Other), E(L"b.md", Kind::Document)}));
     CHECK(s.view.size() == 4 && homeSelected(s)->name == L"proj");
+    // A failed refresh keeps the last readable listing and flags it stale.
+    dirmodel::Listing failed;
+    failed.path = L"C:\\notes";
+    homeApplyListing(s, kHomeCurrent, s.gen[kHomeCurrent], std::move(failed));
+    CHECK(s.currentStale && s.view.size() == 4 &&
+          homeSelected(s)->name == L"proj");
     CHECK(s.need & (1u << kHomePreviewDir));  // folder selected -> preview scan requested
     homeTakeRequests(s);
     homeKey(s, 'J', false, false);

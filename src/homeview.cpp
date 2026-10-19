@@ -1690,13 +1690,16 @@ void renderHome(App& app) {
         }
         if (col.view->empty() && !inlineNew) {
             std::wstring msg;
-            if (!col.listing->ok)
+            if (active && H.loading)
+                msg = tr(app, "home.loading");
+            else if (!col.listing->ok)
                 msg = tr(app, "home.read_failed");
             else if (!H.query.empty())
                 msg = tr(app, "home.no_matches");
             else
                 msg = tr(app, "home.empty_folder");
-            if (col.listing->ok) {
+            if (!msg.empty() && col.listing->ok &&
+                !(active && H.loading)) {
                 msg += L"  \x00B7  ";
                 msg += tr(app, H.query.empty() ? "home.empty_hint"
                                                : "home.clear_hint");
@@ -1815,6 +1818,9 @@ void renderHome(App& app) {
     if (!H.repoNotice.empty()) {
         text(app, fm.caption, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
+    } else if (H.currentStale) {
+        text(app, fm.caption, tr(app, "home.stale_folder"), pad, bodyBottom,
+             W - 2 * pad, ftrH, D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else if (!H.fileNotice.empty()) {
         text(app, fm.caption, H.fileNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              withAlpha(th.accent, 0.82f));

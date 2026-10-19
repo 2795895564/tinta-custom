@@ -55,6 +55,7 @@
 | D26 | 会话恢复活动标签 | `[已验证]` | Home 启动时保留 Home 为第 0 个标签，并把上次活动文件标签恢复为当前标签；上次停在 Home 则仍打开 Home | `out/session/01-restored.png`；探针 settings `[Session] tab=` |
 | D27 | Home 外部变化刷新 | `[已验证]` | Home 活动时每 500ms 检查目录写时间；新增/删除/改名后安静重扫，保留光标与多选；文档内容变化仍由现有文件监视处理 | `out/watch/01-before.png`、`02-after-add.png` |
 | D28 | 崩溃会话自动保存 | `[已验证]` | 每 5s 把当前标签集与活动标签写入 `[Session]`，包含 `sessionHomeActive`；强杀后重启可恢复标签 | `out/watch/03-active-b.png`、`04-restored.png` |
+| D29 | 大目录与失败恢复 | `[已验证]` | 10000 文件目录由后台线程扫描，列表显示数量且 j/k 可用；扫描中空列显示 Loading；刷新失败保留上次可用列表并提示 stale | `out/large/01-large.png`、`02-after-j.png`；`home_logic_tests` 覆盖 stale 保留 |
 
 ## C. 提案 / 待决定
 
@@ -111,6 +112,7 @@
 | V30 | 会话恢复活动标签 | `[已验证]` | 预置 Home + a.md + b.md，sessionActive=1；启动后 b.md 为当前标签并显示 Bravo | `out/session/01-restored.png` |
 | V31 | Home 目录外部刷新 | `[已验证]` | Home 根目录从 2 项变 3 项（外部创建 c.md），光标仍在 a.md | `out/watch/01-before.png`、`02-after-add.png` |
 | V32 | 崩溃后恢复标签 | `[已验证]` | 打开 b.md，等待 >5s，强杀；settings 写入 `sessionHomeActive=0` + b.md；重启后 b.md 为活动标签 | `out/watch/03-active-b.png`、`04-restored.png` |
+| V33 | 10000 文件目录 | `[已验证]` | 进入 10000 项目录，约 1.6s 内显示 `10000 items`，j/k 继续移动；失败刷新保留旧列表 | `out/large/01-large.png`、`02-after-j.png` |
 
 ## F. 环境限制
 
@@ -150,3 +152,4 @@
 - 2026-10-20：全屏列宽：单列上限 1000 DIP，双列 520、三列 400；单列总宽与双列总宽只差 56 DIP，减少“单列→双列”的突兀跳变。
 - 2026-10-20：会话恢复：Home 启动时把上次活动文件标签设为当前标签，不再总是回到 Home；上次活动是 Home 时保持 Home。
 - 2026-10-20：外部变化与崩溃恢复：Home 目录写时间变化触发安静重扫；标签会话每 5s 自动保存，并记录 `sessionHomeActive`，强杀后也能恢复活动标签。
+- 2026-10-20：大目录与失败恢复：扫描中显示 `Loading…`；10000 项目录后台扫描、列表可用；刷新失败保留上次列表并显示 stale 提示，不再清空成“无法读取”。
