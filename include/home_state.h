@@ -115,6 +115,7 @@ struct HomeState {
     std::wstring dialogText;      // name being typed
     std::wstring dialogOriginal;  // rename/delete source name
     std::vector<std::wstring> dialogTargets;  // delete selection
+    int dialogHover = -1;  // 0 = cancel/skip, 1 = primary
     std::wstring dialogParent;    // directory the operation applies to
     int dialogCaret = 0;
     HomeDialogError dialogError = HomeDialogError::None;

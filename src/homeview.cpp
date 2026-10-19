@@ -1037,22 +1037,25 @@ bool homeOnChar(App& app, HWND hwnd, wchar_t c) {
 }
 
 bool homeOnMouseMove(App& app, HWND hwnd, int x, int y) {
-    if (app.home.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+    if (app.home.dialog != HomeDialogKind::None) {
         x -= (int)documentViewportX(app);
         HomeState& H = app.home;
         auto in = [&](const HomeRect& r) {
             return x >= r.l && x < r.r && y >= r.t && y < r.b;
         };
-        int choice = H.pasteConflictChoice;
-        if (in(H.dialogPrimaryHit)) choice = 1;
-        else if (in(H.dialogCancelHit)) choice = 0;
-        if (choice != H.pasteConflictChoice) {
-            H.pasteConflictChoice = choice;
-            InvalidateRect(hwnd, nullptr, FALSE);
+        int hover = -1;
+        if (in(H.dialogPrimaryHit)) hover = 1;
+        else if (in(H.dialogCancelHit)) hover = 0;
+        bool changed = hover != H.dialogHover;
+        H.dialogHover = hover;
+        if (H.dialog == HomeDialogKind::ConfirmPasteConflicts && hover >= 0 &&
+            H.pasteConflictChoice != hover) {
+            H.pasteConflictChoice = hover;
+            changed = true;
         }
+        if (changed) InvalidateRect(hwnd, nullptr, FALSE);
         return true;
     }
-    if (app.home.dialog != HomeDialogKind::None) return false;
     x -= (int)documentViewportX(app);  // rects are recorded in the translated space
     int hoverColumn = -1, hoverRow = -1;
     for (const auto& hit : app.home.columnHits) {
@@ -1415,16 +1418,19 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
     const D2D1_COLOR_F primaryColor =
         (confirm || pasteConflict) ? D2D1::ColorF(0.78f, 0.38f, 0.34f)
                                    : th.accent;
-    if (pasteConflict && H.pasteConflictChoice == 0) {
+    const bool primaryHover = H.dialogHover == 1;
+    const bool cancelHover = H.dialogHover == 0;
+    if (cancelHover || (pasteConflict && H.pasteConflictChoice == 0)) {
         fillRound(app, cancelX, buttonsY, cancelX + cancelW,
                   buttonsY + dpi(app, 30), dpi(app, 6),
-                  mix(th.background, th.accent, 0.16f));
+                  mix(th.background, th.accent, cancelHover ? 0.22f : 0.16f));
     }
     fillRound(app, primaryX, buttonsY, primaryX + primaryW,
-              buttonsY + dpi(app, 30), dpi(app, 6), primaryColor);
+              buttonsY + dpi(app, 30), dpi(app, 6),
+              mix(primaryColor, th.text, primaryHover ? 0.12f : 0.0f));
     strokeRound(app, cancelX + 0.5f, buttonsY + 0.5f, cancelX + cancelW - 0.5f,
                 buttonsY + dpi(app, 30) - 0.5f, dpi(app, 6),
-                withAlpha(th.text, 0.22f), 1.0f);
+                withAlpha(th.text, cancelHover ? 0.42f : 0.22f), 1.0f);
     if (pasteConflict) {
         const float focusX =
             H.pasteConflictChoice == 1 ? primaryX : cancelX;
@@ -1434,14 +1440,22 @@ void renderHomeDialog(App& app, HomeState& H, const Fmts& fm, float W, float top
                     focusX + focusW + dpi(app, 2),
                     buttonsY + dpi(app, 30) + dpi(app, 2), dpi(app, 8),
                     withAlpha(th.accent, 0.95f), 2.0f);
+    } else {
+        // Delete has one confirm action; keep the ring on it so Enter is clear.
+        strokeRound(app, primaryX - dpi(app, 2), buttonsY - dpi(app, 2),
+                    primaryX + primaryW + dpi(app, 2),
+                    buttonsY + dpi(app, 30) + dpi(app, 2), dpi(app, 8),
+                    withAlpha(th.accent, primaryHover ? 0.95f : 0.55f), 1.6f);
     }
     text(app, fm.button, primary, primaryX, buttonsY, primaryW, dpi(app, 30),
          th.background);
     text(app, fm.button, pasteConflict ? tr(app, "home.paste_skip")
                                        : tr(app, "home.cancel"),
          cancelX, buttonsY, cancelW, dpi(app, 30),
-         withAlpha(th.text, pasteConflict && H.pasteConflictChoice == 0 ? 0.95f
-                                                                       : 0.78f));
+         withAlpha(th.text, (cancelHover || (pasteConflict &&
+                                            H.pasteConflictChoice == 0))
+                                ? 0.95f
+                                : 0.78f));
 }
 
 void renderHome(App& app) {

@@ -40,6 +40,15 @@ Screenshots live in `out/polish/`.
 - Trying to resize to 400px stops at the 520×420 DIP minimum.
 - Screenshots: `out/longname/01-normal.png`, `02-narrow.png`.
 
+## Dialog buttons
+
+- Delete confirmation: `Delete` carries a persistent focus ring (Enter) and
+  `Cancel` gets a filled hover state.
+- Paste-conflict card: the focus ring follows the mouse and Left/Right/Tab.
+- Button fills keep a clear contrast between the neutral cancel/skip action
+  and the red destructive/overwrite action.
+- Screenshot: `out/dialog/01-delete.png`.
+
 ## Limits
 
 - Hover-only styling is still subtle by design; keyboard selection is the

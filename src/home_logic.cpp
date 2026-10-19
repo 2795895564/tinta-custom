@@ -130,6 +130,7 @@ void beginDialog(HomeState& s, HomeDialogKind kind) {
     // A rename/new/delete invalidates the paths recorded by the last paste.
     s.undoTransfers.clear();
     s.dialog = kind;
+    s.dialogHover = -1;
     s.dialogCommit = false;
     s.dialogError = HomeDialogError::None;
     s.dialogErrorCode = 0;
@@ -243,6 +244,7 @@ void homeDialogClose(HomeState& s) {
     s.dialogText.clear();
     s.dialogOriginal.clear();
     s.dialogTargets.clear();
+    s.dialogHover = -1;
     s.pasteConflicts.clear();
     s.pasteConflictChoice = 0;
     s.dialogParent.clear();
