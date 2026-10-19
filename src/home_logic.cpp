@@ -389,6 +389,8 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
 }
 
 bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
+    // A paste/error notice is transient: the next command replaces it.
+    s.fileNotice.clear();
     if (s.dialog != HomeDialogKind::None) return dialogKey(s, vk);
     if (s.screen == HomeScreen::Picker) return pickerKey(s, vk, ctrl);
     enum : unsigned { BACK = 0x08, RET = 0x0D, ESC = 0x1B, PGUP = 0x21, PGDN = 0x22,

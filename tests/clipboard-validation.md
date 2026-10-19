@@ -21,7 +21,9 @@ The footer shows `N selected` and `N copied` / `N cut`.
    Every visible row is selected and the footer shows `3 selected`.
 2. Press `Ctrl+C`. Footer shows `3 copied`.
 3. Navigate into `dest/` and press `Ctrl+V`. Files appear there; the footer
-   reports `Pasted 3 · skipped 0 · failed 0`.
+   reports `Pasted 3 · skipped 0 · failed 0`. Press any next key (move, Space
+   or Ctrl+C): the paste notice disappears and the normal selection/clipboard
+   status returns.
 4. Press `Ctrl+X` on `c.md`, go to `dest/`, press `Ctrl+V`. `c.md` disappears
    from the source and appears in `dest/`; the clipboard clears.
 5. Paste again with an existing name. It is skipped, not overwritten; the

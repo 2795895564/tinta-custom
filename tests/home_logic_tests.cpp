@@ -129,6 +129,9 @@ int main() {
     s.clipboard.clear();
     s.clipboardCut = false;
     s.selected.clear();
+    s.fileNotice = L"Pasted 2";
+    homeKey(s, 'J', false, false);
+    CHECK(s.fileNotice.empty());  // next command clears the old paste notice
 
     // search typing is swallowed from shortcuts; '/' echo is dropped
     CHECK(homeKey(s, 0xBF, false, false) && s.searching);
