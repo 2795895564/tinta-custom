@@ -4,11 +4,13 @@ Screenshots live in `out/polish/`.
 
 ## Selection
 
-- Select two rows with `Space`: both rows get a stronger tint and accent rail.
-- The file name and metadata brighten together; the current row still has the
-  stronger fill.
+- Cursor-only row: neutral fill plus a thin accent outline, no rail.
+- `Space` marks a row: accent fill plus a left rail.
+- Two adjacent marked rows keep a 1px gap, so they do not merge.
+- Moving the cursor to an unmarked row leaves the marked rows intact and the
+  cursor row neutral.
 - Footer switches to `Ctrl+C copy  Ctrl+X cut  D delete  Esc clear`.
-- Screenshot: `03-selected.png`.
+- Screenshots: `out/select/01-cursor.png`, `02-two.png`, `03-cursor-next.png`.
 
 ## Empty folder
 

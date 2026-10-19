@@ -1683,19 +1683,36 @@ void renderHome(App& app) {
                 active && H.dialog == HomeDialogKind::Rename && row == col.sel;
             const bool multi = active && homeIsSelected(H, e.name);
             const bool hovered = ci == H.hoverColumn && row == H.hoverRow;
-            if (selected) {
-                fill(app, x + 1, y, x + colW - 1, y + rowH,
-                     mix(th.background, th.accent, th.isDark ? 0.22f : 0.16f));
-                fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
-                     y + rowH - dpi(app, 2), th.accent);
-            } else if (multi) {
-                fill(app, x + 1, y, x + colW - 1, y + rowH,
-                     mix(th.background, th.accent, th.isDark ? 0.18f : 0.13f));
-                fill(app, x + dpi(app, 2), y + dpi(app, 2), x + dpi(app, 4),
-                     y + rowH - dpi(app, 2), withAlpha(th.accent, 0.82f));
+            // Cursor and marked selection are different states: the cursor is
+            // a neutral row with an accent outline; marked rows get the accent
+            // fill and rail. A 1px inset keeps adjacent marked rows distinct.
+            const float rowL = x + dpi(app, 2);
+            const float rowR = x + colW - dpi(app, 2);
+            const float rowT = y + dpi(app, 1);
+            const float rowB = y + rowH - dpi(app, 1);
+            const float rowRadius = dpi(app, 4);
+            if (multi) {
+                fillRound(app, rowL, rowT, rowR, rowB, rowRadius,
+                          mix(th.background, th.accent,
+                              th.isDark ? 0.26f : 0.18f));
+                fillRound(app, rowL, rowT + dpi(app, 3), rowL + dpi(app, 3),
+                          rowB - dpi(app, 3), dpi(app, 1.5f), th.accent);
+            } else if (selected) {
+                fillRound(app, rowL, rowT, rowR, rowB, rowRadius,
+                          mix(th.background, th.text,
+                              th.isDark ? 0.09f : 0.06f));
+                strokeRound(app, rowL + 0.5f, rowT + 0.5f, rowR - 0.5f,
+                            rowB - 0.5f, rowRadius,
+                            withAlpha(th.accent, 0.55f), 1.0f);
             } else if (hovered) {
-                fill(app, x + 1, y, x + colW - 1, y + rowH,
-                     mix(th.background, th.text, th.isDark ? 0.10f : 0.075f));
+                fillRound(app, rowL, rowT, rowR, rowB, rowRadius,
+                          mix(th.background, th.text,
+                              th.isDark ? 0.10f : 0.075f));
+            }
+            if (selected && multi) {
+                strokeRound(app, rowL + 0.5f, rowT + 0.5f, rowR - 0.5f,
+                            rowB - 0.5f, rowRadius,
+                            withAlpha(th.accent, 0.95f), 1.4f);
             }
 
             // Folder chevron or file-type badge in a fixed leading slot.
