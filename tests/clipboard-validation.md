@@ -26,11 +26,10 @@ The footer shows `N selected` and `N copied` / `N cut`.
    status returns.
 4. Press `Ctrl+X` on `c.md`, go to `dest/`, press `Ctrl+V`. `c.md` disappears
    from the source and appears in `dest/`; the clipboard clears.
-5. Paste with an existing name. A `Name conflicts` card lists the colliding
-   names. `Skip` keeps the old files and pastes the rest; `Overwrite` replaces
-   same-named files.
-6. The two buttons have different colours (Skip neutral, Overwrite red) and
-   the focused one gets a clear ring. Left/Right/Tab switches; Enter confirms;
+5. Paste with an existing name. The footer shows one line:
+   `1 file(s) already exist: a.md   Enter: skip   O: overwrite   Esc: cancel`.
+   There is no large dialog.
+6. Enter keeps the old files and pastes the rest; O replaces same-named files;
    Esc cancels without pasting.
 7. Try to copy/move a folder into itself or a descendant. It is skipped.
 8. Ctrl+C/X/V in the editor still operate on text; the file clipboard only
@@ -58,11 +57,10 @@ The probe created `a.md`, `b.md`, `c.md`, copied `a/b` into `dest/`, then cut
 
 ## Overwrite probe
 
-`out/conflict/`:
+`out/prompt/`:
 
-- `01-conflict.png` — conflict card with `a.md`, Skip focused
-- `03-overwrite-selected.png` — Overwrite focused via Right
-- Skip kept `dest/a.md` as `OLD-A`; Overwrite changed it to `NEW-A`
+- `01-prompt.png` — footer prompt listing `a.md` with Enter/O/Esc
+- Enter kept `dest/a.md` as `OLD`; O changed it to `NEW`
 
 Folder merging on overwrite is intentionally not offered; conflicting folders
 are skipped.

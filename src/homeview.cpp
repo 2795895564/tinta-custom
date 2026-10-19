@@ -1394,8 +1394,7 @@ void renderHome(App& app) {
     HomeState& H = app.home;
     H.rowHits.clear();
     H.columnHits.clear();
-    if (H.dialog != HomeDialogKind::ConfirmDelete &&
-        H.dialog != HomeDialogKind::ConfirmPasteConflicts) {
+    if (H.dialog != HomeDialogKind::ConfirmDelete) {
         H.dialogPrimaryHit = HomeRect{};
         H.dialogCancelHit = HomeRect{};
     }
@@ -1681,7 +1680,22 @@ void renderHome(App& app) {
     // Footer: selected item on the left, key hints on the right.
     fill(app, 0, bodyBottom, W, bottom, mix(th.background, th.text, th.isDark ? 0.05f : -0.04f));
     fill(app, 0, bodyBottom, W, bodyBottom + 1, line);
-    if (!H.repoNotice.empty()) {
+    if (H.dialog == HomeDialogKind::ConfirmPasteConflicts) {
+        std::wstring names;
+        const int shown = std::min(3, (int)H.pasteConflicts.size());
+        for (int i = 0; i < shown; i++) {
+            if (i) names += L", ";
+            names += H.pasteConflicts[i];
+        }
+        if ((int)H.pasteConflicts.size() > shown)
+            names += L" +" + std::to_wstring(H.pasteConflicts.size() - shown);
+        wchar_t prompt[512];
+        swprintf_s(prompt, _countof(prompt),
+                   tr(app, "home.paste_conflict_prompt"),
+                   (unsigned)H.pasteConflicts.size(), names.c_str());
+        text(app, fm.caption, prompt, pad, bodyBottom, W - 2 * pad, ftrH,
+             D2D1::ColorF(0.86f, 0.46f, 0.42f));
+    } else if (!H.repoNotice.empty()) {
         text(app, fm.caption, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH,
              D2D1::ColorF(0.86f, 0.46f, 0.42f));
     } else if (!H.fileNotice.empty()) {
@@ -1749,8 +1763,7 @@ void renderHome(App& app) {
         text(app, fm.caption, info, pad, bodyBottom, std::max(0.0f, infoW), ftrH,
              infoColor);
     }
-    if (H.dialog == HomeDialogKind::ConfirmDelete ||
-        H.dialog == HomeDialogKind::ConfirmPasteConflicts)
+    if (H.dialog == HomeDialogKind::ConfirmDelete)
         renderHomeDialog(app, H, fm, W, top, bottom);
     fm.release();
 }
