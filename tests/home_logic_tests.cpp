@@ -171,8 +171,19 @@ int main() {
     CHECK(homeKey(p, '3', false, false) && p.pendingChoose.empty() && !p.repoNotice.empty());  // missing: notice only
     CHECK(homeKey(p, '9', false, false) && p.pendingChoose.empty());                            // no such row: eaten
     CHECK(homeKey(p, 'J', false, false) && p.repoSel == 2 && homeKey(p, 'J', false, false) && p.repoSel == 2);
+    p.pendingRelocate.clear();
+    CHECK(homeKey(p, 'R', false, false) && p.pendingRelocate == "r3");  // missing: relocate
     CHECK(homeKey(p, 'K', false, false) && p.repoSel == 1);
+    p.pendingRelocate.clear();
+    CHECK(homeKey(p, 'R', false, false) && p.pendingRelocate.empty() && !p.repoNotice.empty());
     p.repoNotice.clear();
+    p.pendingDefault.clear();
+    CHECK(homeKey(p, 'D', false, false) && p.pendingDefault == "r2");  // healthy: set default
+    p.pendingDefault.clear();
+    homeKey(p, 'J', false, false);
+    CHECK(homeKey(p, 'D', false, false) && p.pendingDefault.empty() && !p.repoNotice.empty());
+    p.repoNotice.clear();
+    homeKey(p, 'K', false, false);
     CHECK(homeKey(p, 0x0D, false, false) && p.pendingChoose == "r2");
     CHECK(homeKey(p, 'O', true, false) && p.pendingBrowse);       // Ctrl+O: add folder
     p.pendingBrowse = false;

@@ -96,7 +96,8 @@ void refreshRows(App& app) {
     Settings st = loadSettings();
     std::vector<RepoRow> rows;
     for (const auto& r : st.repoList)
-        rows.push_back({r.id, toWide(r.name), toWide(r.path), r.lastOpened, !dirExists(r.path)});
+        rows.push_back({r.id, toWide(r.name), toWide(r.path), r.lastOpened,
+                        !dirExists(r.path), r.id == st.currentRepoId});
     homeSetRepoRows(app.home, std::move(rows));
 }
 
@@ -208,6 +209,37 @@ std::wstring pickFolder(HWND owner) {
     return result;
 }
 
+// Point an existing repository at a new folder without losing its id, name or
+// place in settings. Used when the original folder was moved or renamed.
+void relocateRepo(App& app, HWND hwnd, const std::string& id) {
+    Settings st = loadSettings();
+    int i = repos::indexOfId(st.repoList, id);
+    if (i < 0) return;
+    std::wstring folder = pickFolder(hwnd);
+    if (folder.empty()) return;  // dialog cancelled: keep the current state
+    const std::string path = toUtf8(folder);
+    int duplicate = repos::indexOfPath(st.repoList, path);
+    if (duplicate >= 0 && st.repoList[duplicate].id != id) {
+        app.home.repoNotice = L"That folder is already a repository: " +
+                              toWide(st.repoList[duplicate].name);
+        return;
+    }
+
+    repos::Repo& repo = st.repoList[i];
+    repo.path = path;
+    if (repo.name.empty()) repo.name = toUtf8(dirmodel::leafOf(folder));
+    repo.lastDir.clear();
+    repos::touch(st.repoList, id, nowTicks());
+    st.currentRepoId = id;
+    const bool saved = saveSettings(st);
+    refreshRows(app);
+    if (activateRepo(app, st, id) && !saved) {
+        app.home.repoNotice =
+            L"Repository relocated for this session, but settings could not be saved: " +
+            getSettingsPath();
+    }
+}
+
 // After any state change: run the side effects the logic left behind
 // (dialogs, settings, scans, opening a file), then repaint
 void settle(App& app, HWND hwnd) {
@@ -221,6 +253,28 @@ void settle(App& app, HWND hwnd) {
         H.pendingBrowse = false;
         std::wstring folder = pickFolder(hwnd);
         if (!folder.empty()) addRepoFromFolder(app, folder);
+    }
+    if (!H.pendingRelocate.empty()) {
+        std::string id = std::move(H.pendingRelocate);
+        H.pendingRelocate.clear();
+        relocateRepo(app, hwnd, id);
+    }
+    if (!H.pendingDefault.empty()) {
+        std::string id = std::move(H.pendingDefault);
+        H.pendingDefault.clear();
+        Settings st = loadSettings();
+        int i = repos::indexOfId(st.repoList, id);
+        if (i < 0 || !dirExists(st.repoList[i].path)) {
+            H.repoNotice = L"That repository cannot be the startup repository.";
+        } else {
+            st.currentRepoId = id;
+            st.startupMode = repos::kStartLast;
+            if (!saveSettings(st))
+                H.repoNotice =
+                    L"Startup repository changed for this session, but settings could not be saved: " +
+                    getSettingsPath();
+            refreshRows(app);
+        }
     }
     if (!H.pendingChoose.empty()) {
         std::string id = std::move(H.pendingChoose);
@@ -778,7 +832,22 @@ bool homeOnLButtonDown(App& app, HWND hwnd, int x, int y) {
             H.pendingBrowse = true;
         } else {
             for (const auto& hit : H.rowHits) {
-                if (in(hit.first)) { H.repoSel = hit.second; homeChooseRepo(H, hit.second); break; }
+                if (!in(hit.first)) continue;
+                H.repoSel = hit.second;
+                const unsigned long long now = nowTicks();
+                const bool doubleClick =
+                    H.lastClickRow == hit.second &&
+                    now - H.lastClickTick < 5000000ULL;  // 500 ms in FILETIME ticks
+                H.lastClickRow = hit.second;
+                H.lastClickTick = now;
+                if (doubleClick && hit.second < (int)H.repoRows.size() &&
+                    H.repoRows[hit.second].missing) {
+                    H.pendingRelocate = H.repoRows[hit.second].id;
+                    H.repoNotice.clear();
+                } else {
+                    homeChooseRepo(H, hit.second);
+                }
+                break;
             }
         }
         settle(app, hwnd);
@@ -932,16 +1001,28 @@ static void renderPicker(App& app, const Fmts& fm) {
                  lw - dpi(app, 52) - whenW, rowH / 2, nameC);
             text(app, fm.caption, r.path, lx + dpi(app, 40), ly + rowH / 2, lw - dpi(app, 52),
                  rowH / 2 - dpi(app, 4), dim);
-            text(app, fm.right, r.missing ? std::wstring(L"folder missing") : formatWhen(r.lastOpened),
+            std::wstring state;
+            D2D1_COLOR_F stateC = dim;
+            if (r.missing) {
+                state = sel ? L"missing \u00B7 r" : L"folder missing";
+                stateC = warn;
+            } else if (r.current) {
+                state = L"default";
+                stateC = th.accent;
+            } else {
+                state = formatWhen(r.lastOpened);
+            }
+            text(app, fm.right, state,
                  lx + lw - dpi(app, 12) - whenW, ly + dpi(app, 6), whenW, rowH / 2,
-                 r.missing ? warn : dim);
+                 stateC);
             H.rowHits.push_back({HomeRect{lx, ly, lx + lw, ly + rowH}, i});
         }
     }
 
     fill(app, 0, bodyBottom, W, bottom, mix(th.background, th.text, th.isDark ? 0.05f : -0.04f));
-    std::wstring hint = hasRows ? L"1-9 open    ↑ ↓ select    Enter open    o add folder    x forget"
-                                : L"Ctrl+O choose a folder    or drop one here";
+    std::wstring hint = hasRows
+        ? L"1-9 open   ↑↓ select   Enter open   o add   r relocate   d default   x forget"
+        : L"Ctrl+O choose a folder    or drop one here";
     if (hasRows && !H.root.empty()) hint += L"    Esc back";
     if (!H.repoNotice.empty()) text(app, fm.left, H.repoNotice, pad, bodyBottom, W - 2 * pad, ftrH, warn);
     else text(app, fm.left, hint, pad, bodyBottom, W - 2 * pad, ftrH, dim);

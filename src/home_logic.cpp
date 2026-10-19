@@ -326,6 +326,23 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
         case UP: case 'K': s.repoSel = std::max(s.repoSel - 1, 0); return true;
         case RET: if (n) homeChooseRepo(s, s.repoSel); return true;
         case 'O': s.pendingBrowse = true; return true;
+        case 'R':
+            if (n && s.repoRows[s.repoSel].missing) {
+                s.pendingRelocate = s.repoRows[s.repoSel].id;
+                s.repoNotice.clear();
+            } else if (n) {
+                s.repoNotice =
+                    L"Select a missing repository (marked \"folder missing\") to relocate it.";
+            }
+            return true;
+        case 'D':
+            if (n && !s.repoRows[s.repoSel].missing) {
+                s.pendingDefault = s.repoRows[s.repoSel].id;
+                s.repoNotice.clear();
+            } else if (n) {
+                s.repoNotice = L"A missing repository cannot be the startup repository.";
+            }
+            return true;
         case DEL: case 'X':
             if (n) s.pendingRemove = s.repoRows[s.repoSel].id;
             return true;
@@ -383,6 +400,8 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             s.screen = HomeScreen::Picker;
             s.refreshRows = true;
             s.repoNotice.clear();
+            s.lastClickRow = -1;
+            s.lastClickTick = 0;
             return true;
         case 'N':
             beginDialog(s, shift ? HomeDialogKind::NewFolder
@@ -453,6 +472,8 @@ void homeShowPicker(HomeState& s) {
     s.screen = HomeScreen::Picker;
     s.refreshRows = true;
     s.repoNotice.clear();
+    s.lastClickRow = -1;  // do not pair a picker click with an old file click
+    s.lastClickTick = 0;
 }
 
 void homeChooseRepo(HomeState& s, int index) {

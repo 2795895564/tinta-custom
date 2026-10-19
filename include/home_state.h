@@ -35,6 +35,7 @@ struct RepoRow {
     std::wstring name, path;
     unsigned long long lastOpened = 0;
     bool missing = false;  // the folder no longer exists
+    bool current = false;  // shown as the startup/default repository
 };
 
 // One visible line in the Home B folder tree
@@ -115,7 +116,7 @@ struct HomeState {
     std::wstring repoNotice;
     bool refreshRows = false;
     bool pendingBrowse = false;
-    std::string pendingChoose, pendingRemove;
+    std::string pendingChoose, pendingRemove, pendingRelocate, pendingDefault;
     HomeRect browseBtn;
     bool hasBrowseBtn = false;
 
