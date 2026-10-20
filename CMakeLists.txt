@@ -43,6 +43,10 @@ set(SOURCES
     src/themes.cpp
     src/settings.cpp
     src/keymap.cpp
+    src/escape.cpp
+    src/commands.cpp
+    src/settings_schema.cpp
+    src/settings_keys.cpp
     src/config_dir.cpp
     src/signals.cpp
     src/tableedit.cpp
@@ -112,6 +116,10 @@ set(HEADERS
     include/app.h
     include/settings.h
     include/keymap.h
+    include/escape.h
+    include/commands.h
+    include/settings_schema.h
+    include/settings_keys.h
     include/d2d_init.h
     include/syntax.h
     include/utils.h
@@ -181,15 +189,41 @@ target_compile_definitions(tinta PRIVATE UNICODE _UNICODE
     TINTA_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
 if(BUILD_TESTING)
-    add_executable(keymap_tests tests/keymap_tests.cpp src/keymap.cpp)
+    add_executable(keymap_tests tests/keymap_tests.cpp src/keymap.cpp src/commands.cpp)
     target_include_directories(keymap_tests PRIVATE include)
     add_test(NAME keymap COMMAND keymap_tests)
+
+    # Chord → command resolution is pure logic: one table, exact chords.
+    add_executable(commands_tests tests/commands_tests.cpp src/commands.cpp)
+    target_include_directories(commands_tests PRIVATE include)
+    add_test(NAME commands COMMAND commands_tests)
+
+    # The preference model: rows, groups, apply timing and range clamping.
+    # The Keys group is generated from the keymap, so the test links it too.
+    add_executable(settings_schema_tests tests/settings_schema_tests.cpp
+        src/settings_schema.cpp src/keymap.cpp src/commands.cpp)
+    target_include_directories(settings_schema_tests PRIVATE include)
+    target_link_libraries(settings_schema_tests PRIVATE user32)
+    add_test(NAME settings_schema COMMAND settings_schema_tests)
+
+    # The Keyboard shortcuts section: rail order, panel heights, generated rows
+    # and the capture rules. The panel and the router share this model, so the
+    # two cannot accept different keys or disagree about a conflict.
+    add_executable(settings_keys_tests tests/settings_keys_tests.cpp
+        src/settings_keys.cpp src/keymap.cpp src/commands.cpp)
+    target_include_directories(settings_keys_tests PRIVATE include)
+    add_test(NAME settings_keys COMMAND settings_keys_tests)
+
+    # Esc priority is pure logic: one table decides which layer answers Esc.
+    add_executable(escape_tests tests/escape_tests.cpp src/escape.cpp)
+    target_include_directories(escape_tests PRIVATE include)
+    add_test(NAME escape COMMAND escape_tests)
 
     # Exercise the real input handlers and editor with a message-only test
     # window, including layout-dependent character sequences (#195).
     set(INPUT_TEST_SOURCES ${SOURCES})
     list(REMOVE_ITEM INPUT_TEST_SOURCES src/main_d2d.cpp)
-    add_executable(input_tests tests/input_tests.cpp tests/table_input_tests.cpp tests/docked_preview_tests.cpp tests/preview_follow_tests.cpp tests/table_layout_tests.cpp tests/window_drag_tests.cpp tests/tab_drop_tests.cpp tests/tab_hover_card_tests.cpp tests/search_panel_tests.cpp tests/superscript_tests.cpp tests/sidepanel_tests.cpp tests/image_tests.cpp tests/search_input_tests.cpp tests/wrapped_cursor_tests.cpp tests/file_fragment_tests.cpp tests/editor_context_tests.cpp tests/editor_features_tests.cpp tests/ui_font_tests.cpp tests/print_export_tests.cpp ${INPUT_TEST_SOURCES})
+    add_executable(input_tests tests/input_tests.cpp tests/table_input_tests.cpp tests/docked_preview_tests.cpp tests/preview_follow_tests.cpp tests/table_layout_tests.cpp tests/window_drag_tests.cpp tests/tab_drop_tests.cpp tests/tab_hover_card_tests.cpp tests/search_panel_tests.cpp tests/superscript_tests.cpp tests/image_tests.cpp tests/search_input_tests.cpp tests/wrapped_cursor_tests.cpp tests/file_fragment_tests.cpp tests/editor_context_tests.cpp tests/editor_features_tests.cpp tests/ui_font_tests.cpp tests/print_export_tests.cpp ${INPUT_TEST_SOURCES})
     target_include_directories(input_tests PRIVATE include ${md4c_SOURCE_DIR}/src)
     target_link_libraries(input_tests PRIVATE $<TARGET_PROPERTY:tinta,LINK_LIBRARIES>)
     target_compile_definitions(input_tests PRIVATE $<TARGET_PROPERTY:tinta,COMPILE_DEFINITIONS>
@@ -199,7 +233,6 @@ if(BUILD_TESTING)
         TINTA_SEARCH_PANEL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/search-panel"
         TINTA_SUPERSCRIPT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/superscript-subscript.md"
         TINTA_CODE_BASELINE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inline-code-baseline-259.md"
-        TINTA_PANEL_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/toc-browser-resize.md"
         TINTA_IMAGE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/image-cache-large.md"
         TINTA_FIND_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/find-table-focus.md"
         TINTA_WRAP_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wrapped-cursor-selection.md"
@@ -263,10 +296,6 @@ if(BUILD_TESTING)
         -DTEST_BINARY=$<TARGET_FILE:input_tests>
         -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/window-drag-test-$<CONFIG>
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_window_drag_tests.cmake)
-    add_test(NAME contents_and_panel_resize COMMAND ${CMAKE_COMMAND}
-        -DTEST_BINARY=$<TARGET_FILE:input_tests>
-        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/sidepanel-test-$<CONFIG>
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_sidepanel_tests.cmake)
     add_test(NAME superscript_and_learn COMMAND ${CMAKE_COMMAND}
         -DTEST_BINARY=$<TARGET_FILE:input_tests>
         -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/superscript-test-$<CONFIG>

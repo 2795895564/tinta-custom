@@ -18,6 +18,7 @@
 #include "editor.h"  // toUtf8
 #include "file_utils.h"
 #include "i18n.h"
+#include "keymap.h"
 #include "repos.h"
 #include "settings.h"
 #include "startpage.h"
@@ -109,7 +110,7 @@ void persistLastDir(App& app) {
     int i = repos::indexOfId(st.repoList, H.repoId);
     if (i < 0) return;
     st.repoList[i].lastDir = toUtf8(H.dir);
-    saveSettings(st);
+    saveSettingsReported(app, st);
 }
 
 bool activateRepo(App& app, const Settings& st, const std::string& id) {
@@ -148,7 +149,7 @@ void enterRepo(App& app, const std::string& id) {
     }
     repos::touch(st.repoList, id, nowTicks());
     st.currentRepoId = id;
-    saveSettings(st);
+    saveSettingsReported(app, st);
     activateRepo(app, st, id);
 }
 
@@ -170,7 +171,7 @@ void forgetRepo(App& app, const std::string& id) {
     Settings st = loadSettings();
     repos::remove(st.repoList, id);
     if (st.currentRepoId == id) st.currentRepoId.clear();
-    saveSettings(st);
+    saveSettingsReported(app, st);
     if (H.repoId == id) {
         H.repoId.clear();
         H.root.clear();
@@ -245,6 +246,7 @@ void relocateRepo(App& app, HWND hwnd, const std::string& id) {
 void pasteClipboard(App& app, HWND hwnd, bool overwrite);
 void preparePaste(App& app, HWND hwnd);
 void undoLastTransfer(App& app, HWND hwnd);
+void refreshCachedColumns(HomeState& H);
 
 void settle(App& app, HWND hwnd) {
     HomeState& H = app.home;
@@ -416,6 +418,7 @@ void pasteClipboard(App& app, HWND hwnd, bool overwrite) {
     }
     if (H.clipboardCut) H.clipboard = std::move(remaining);
     if (pasted) {
+        refreshCachedColumns(H);
         homeNavigate(H, dir, L"");
     } else {
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -459,6 +462,7 @@ void undoLastTransfer(App& app, HWND hwnd) {
         }
     }
     H.undoTransfers.clear();
+    refreshCachedColumns(H);
     homeNavigate(H, H.dir, L"");
     wchar_t message[256];
     swprintf_s(message, _countof(message),
@@ -584,6 +588,21 @@ void homeCommitDialog(App& app, HWND hwnd) {
 
 // --- Home B column browser -------------------------------------------------
 
+// A cut/paste changes the parent column too. The Miller columns redraw saved
+// snapshots, so refresh them explicitly or the left column keeps showing the
+// files that were just moved out.
+void refreshCachedColumns(HomeState& H) {
+    for (HomeColumn& c : H.columns) {
+        dirmodel::Listing listing;
+        dirmodel::scan(c.path, isDocName, listing);
+        if (listing.ok) dirmodel::sortEntries(listing.entries, H.opts);
+        c.listing = std::move(listing);
+        c.view = dirmodel::visible(c.listing.entries, H.opts, L"");
+        if (c.sel >= (int)c.view.size())
+            c.sel = std::max(0, (int)c.view.size() - 1);
+    }
+}
+
 void saveActiveColumn(HomeState& H) {
     if (H.dir.empty()) return;
     HomeColumn c;
@@ -601,13 +620,20 @@ void restoreColumn(HomeState& H, int index) {
     HomeColumn c = std::move(H.columns[index]);
     H.columns.erase(H.columns.begin() + index, H.columns.end());
     H.dir = std::move(c.path);
-    H.current = std::move(c.listing);
-    H.view = std::move(c.view);
-    H.sel = c.sel;
-    H.topRow = c.topRow;
+    // Rescan instead of trusting the snapshot: a cut/paste in a child folder
+    // changes this listing too, and a stale parent column looks like the
+    // files were copied rather than moved.
+    dirmodel::Listing listing;
+    dirmodel::scan(H.dir, isDocName, listing);
+    if (listing.ok) dirmodel::sortEntries(listing.entries, H.opts);
+    H.current = std::move(listing);
+    H.selected.clear();
     H.query.clear();
     H.searching = false;
     H.loading = false;
+    H.sel = 0;
+    H.topRow = 0;
+    H.view = dirmodel::visible(H.current.entries, H.opts, H.query);
 }
 
 bool openColumn(App& app, const std::wstring& path) {
@@ -622,6 +648,7 @@ bool openColumn(App& app, const std::wstring& path) {
     H.query.clear();
     H.searching = false;
     H.loading = false;
+    H.selected.clear();  // marked names belong to the directory being left
     H.sel = 0;
     H.topRow = 0;
     H.view = dirmodel::visible(H.current.entries, H.opts, H.query);
@@ -1024,7 +1051,34 @@ bool homeOnKeyDown(App& app, HWND hwnd, WPARAM vk) {
             }
         }
     }
-    bool handled = homeKey(H, (unsigned)vk, ctrl, shift);
+    // Home file commands are keymap actions: resolve the chord first, then
+    // open the same dialog the legacy fixed keys used to open. homeKey is told
+    // not to read the raw keys below, so rebinding really moves the command.
+    if (!H.searching && H.screen == HomeScreen::Home) {
+        const unsigned mods = (ctrl ? kModCtrl : 0) | (shift ? kModShift : 0);
+        struct FileCommand { int action; unsigned key; bool newFolder; };
+        static const FileCommand kCommands[] = {
+            {KA_NEWFILE, 'N', false},
+            {KA_NEWFOLDER, 'N', true},
+            {KA_RENAME, VK_F2, false},
+            {KA_DELETE, 'D', false},
+        };
+        for (const auto& command : kCommands) {
+            bool matches = keyBindingMatches(app.keymap[command.action],
+                                             (unsigned)vk, false, mods);
+            // Delete keeps its usual keys as fixed aliases even when the
+            // stored profile still says Del: "d" and "Del" both delete.
+            if (command.action == KA_DELETE &&
+                (vk == 'D' || vk == VK_DELETE)) matches = true;
+            if (!matches) continue;
+            homeKey(H, command.key, false, command.newFolder);
+            app.swallowCharsUntil = std::chrono::steady_clock::now() +
+                                    std::chrono::milliseconds(180);
+            settle(app, hwnd);
+            return true;
+        }
+    }
+    bool handled = homeKey(H, (unsigned)vk, ctrl, shift, false);
     // The key that opened the modal must not leak its typed character into
     // the new name field (same guard as the '/' search opener).
     if (handled && H.dialog != HomeDialogKind::None) {

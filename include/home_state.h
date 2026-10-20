@@ -201,7 +201,10 @@ void homeMoveTo(HomeState& s, int index);
 void homeMove(HomeState& s, int delta);
 void homeActivate(HomeState& s);
 void homeUp(HomeState& s);
-bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift);  // true = consumed
+// `fileKeys` lets the view route new-file/new-folder/rename/delete through the
+// remappable keymap; pass false there so the legacy keys stop firing once the
+// action is rebound (tests keep the default for the raw key table).
+bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift, bool fileKeys = true);
 bool homeChar(HomeState& s, wchar_t c);                          // true = consumed
 void homeDialogClose(HomeState& s);
 unsigned homeTakeRequests(HomeState& s);

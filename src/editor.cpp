@@ -1,5 +1,6 @@
 #include "frontmatter_ui.h"
 #include "editor.h"
+#include "commands.h"
 #include "document.h"
 #include "drafts.h"
 #include "signals.h"
@@ -2484,6 +2485,10 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     if (!shortcutModifiersAllowed(static_cast<unsigned>(wParam))) return;
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    // Ctrl+Shift chords are rows in include/commands.h (same table the viewer
+    // uses); Shift is only read for chords the table does not own.
+    const cmd::Chord chord{static_cast<unsigned>(wParam),
+                           (ctrl ? cmd::Ctrl : 0u) | (shift ? cmd::Shift : 0u)};
 
     // The insert menu closes on Esc; any other key falls through to the
     // editor after dismissing it
@@ -2589,7 +2594,7 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     if (ctrl) {
         switch (wParam) {
             case 'S':
-                if (shift) {
+                if (cmd::resolve(chord) == cmd::Command::SaveAs) {
                     saveEditorFileAs(app, hwnd);
                     return;
                 }
@@ -2598,7 +2603,7 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             case 'N':
                 // Notepad model: Ctrl+N opens a fresh note tab (this
                 // buffer parks in its tab), Ctrl+Shift+N a new window
-                if (shift) {
+                if (cmd::resolve(chord) == cmd::Command::NewWindow) {
                     launchQuickNoteWindow();
                 } else {
                     app.swallowCharsUntil =
@@ -2697,7 +2702,7 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                     if (app.editorHasSelection) editorDeleteSelection(app);
                     // Excel range copies arrive as TSV: paste them as a
                     // markdown table (#181). Ctrl+Shift+V pastes raw.
-                    if (!(GetKeyState(VK_SHIFT) & 0x8000) &&
+                    if (cmd::resolve(chord) != cmd::Command::PastePlain &&
                         tsvLooksLikeTable(paste)) {
                         paste = padTableForInsert(
                             app, tsvToMarkdownTable(paste), app.editorCursorPos);
@@ -2721,7 +2726,7 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 openPrintPreview(app, hwnd);
                 return;
             case 'E': {
-                if (shift) { setEditorReadingPreview(app,true); return; }
+                if (cmd::resolve(chord) == cmd::Command::ReadingView) { setEditorReadingPreview(app,true); return; }
                 // Ctrl+E shows / hides the live render beside the source
                 // Ctrl+Shift+E opens the full-width unsaved reading view.
                 app.editorShowPreview = !app.editorShowPreview;

@@ -111,9 +111,10 @@ It's a viewer first: perfect as the double-click default for `.md` and `.mmd` fi
 | `F` / `Ctrl+F` | Open search |
 | `Enter` | Next search match |
 | `Ctrl+Shift+F` | Search results panel: every match beside the page |
-| `ESC` | Close overlay / Quit |
+| `ESC` | Close the top layer: an overlay, or back to Home |
 | `T` | Open theme chooser |
 | `S` | Toggle stats overlay |
+| `F1` / `?` | Open this help |
 | `Ctrl+C` | Copy selected text (or all if none selected) |
 | `Ctrl+A` | Select all text |
 | `Ctrl+Scroll` | Zoom in/out |
@@ -121,7 +122,7 @@ It's a viewer first: perfect as the double-click default for `.md` and `.mmd` fi
 | `Mouse back/forward` / `Alt+←/→` | Walk link jumps with scroll restore |
 | `Page Up/Down` | Page scroll |
 | `Home/End` | Jump to start/end |
-| `:` | Enter edit mode |
+| `E` / `:` | Enter edit mode |
 | `ESC` `ESC` | Exit edit mode |
 | `Ctrl+N` | New quick note — a fresh window, start typing right away; `Ctrl+S` names it via the save dialog. While the note is still empty, an **Open a file** button (`Ctrl+O`) in the preview pane picks an existing file instead |
 | `Ctrl+S` | Save (in edit mode) |
@@ -149,7 +150,8 @@ Settings live in a plain INI file at `%APPDATA%\Tinta\settings.ini` (theme,
 zoom, window placement, word wrap, and more — written on exit). The `[Keys]`
 section holds the Custom profile's bindings if you prefer editing by hand:
 change a value and restart Tinta. Accepted values are letters, digits,
-`Tab`, `Space`, `F1`–`F12`, or any single character.
+`Tab`, `Space`, `F1`–`F12`, any single character, or a Ctrl/Shift chord such as
+`Ctrl+Shift+K`.
 
 ```ini
 [Keys]

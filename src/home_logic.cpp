@@ -458,7 +458,7 @@ static bool pickerKey(HomeState& s, unsigned vk, bool ctrl) {
     }
 }
 
-bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
+bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift, bool fileKeys) {
     // A paste/error notice is transient: the next command replaces it.
     s.fileNotice.clear();
     if (s.dialog != HomeDialogKind::None) return dialogKey(s, vk);
@@ -547,15 +547,18 @@ bool homeKey(HomeState& s, unsigned vk, bool ctrl, bool shift) {
             s.lastClickTick = 0;
             return true;
         case 'N':
+            if (!fileKeys) return false;
             beginDialog(s, shift ? HomeDialogKind::NewFolder
                                  : HomeDialogKind::NewFile);
             return true;
         case 'R':
         case F2:
+            if (!fileKeys) return false;
             beginDialog(s, HomeDialogKind::Rename);
             return true;
         case 'D':
         case DEL:
+            if (!fileKeys) return false;
             beginDialog(s, HomeDialogKind::ConfirmDelete);
             return true;
         case PERIOD: s.opts.showHidden = !s.opts.showHidden; rebuildView(s, L""); return true;

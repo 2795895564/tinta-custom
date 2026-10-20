@@ -166,7 +166,6 @@ int runWrappedCursorTests();
 int runFileFragmentTests();
 int runEditorContextTests();
 int runSuperscriptTests();
-int runSidePanelTests();
 int runImageTests(const char* remoteBase);
 int runTabDropLaunchProbe();
 int runEditorFeatureTests();
@@ -188,7 +187,6 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--search-input-tests") return runSearchInputTests();
     if (argc >= 2 && std::string(argv[1]) == "--image-tests")
         return runImageTests(argc > 2 ? argv[2] : nullptr);
-    if (argc == 2 && std::string(argv[1]) == "--sidepanel-tests") return runSidePanelTests();
     if (argc == 2 && std::string(argv[1]) == "--superscript-tests") return runSuperscriptTests();
     if (argc == 2 && std::string(argv[1]) == "--tab-drop-tests") return runTabDropTests();
     if (argc == 2 && std::string(argv[1]) == "--tab-hover-card-tests") return runTabHoverCardTests();

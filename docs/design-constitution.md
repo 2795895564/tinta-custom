@@ -60,8 +60,8 @@
 5. `[现状]` **仓库根是墙。** 导航不能越出当前仓库根。
 6. `[现状]` **不支持的文件不会被当成文档打开。** 支持的类型明确列在 `document.cpp`，其他显示为不可打开。
 7. `[已决定]` **设置写失败必须可见。** 不允许静默吞掉 `saveSettings` 的失败。
-8. `[提案]` **输入有唯一解析路径。** 键盘事件通过一个命令/焦点模型解析，不在多个分支里重复定义同一个动作。
-9. `[提案]` **模态/浮层的优先级是确定的。** 同一时刻只有一个最上层接收 Esc/Enter。
+8. `[已决定]` **输入有唯一解析路径。** Esc 已全部走 `include/escape.h` 的层级表（`input.cpp` 的 18 处判定改为查表，见 `dev-status.md` D30）；其余键仍走旧路由器，按同一张表逐步迁移。
+9. `[已决定]` **模态/浮层的优先级是确定的。** 优先级表在 `escape.h`；同一时刻只有一个最上层接收 Esc/Enter，新浮层加一行，不新增 `if (VK_ESCAPE)` 分支。
 10. `[现状]` **后台扫描不阻塞 UI。** 大仓库扫描、索引构建都在工作线程，过期结果丢弃。
 
 ## 4. 决策规则（Decision rules）
@@ -139,6 +139,8 @@
 
 设置面板是 schema 的**一个视图**：分组、控件、默认值、校验、应用时机都从表里来。加一个设置项应该是“加一行 schema + 一个控件类型”，而不是再改四处。
 
+`[实现中]` 表已带上这些字段：`include/settings_schema.h` 的 `Row` 有 `id/group/type/apply/scope/advanced/labelKey/hintKey/defaultValue/range/validate/boolField/action`；`Type` 覆盖 bool/enum/int/string/chord；共 24 个基础行，另加 17 个由 keymap 生成的 `key.<action>` chord 行（默认值直接取 Windows 档，不再手抄）。`sanitize()` 不再有硬编码分支，而是遍历行调用各自的 `validate`，范围声明在行上；外观页两个阅读宽度滑块的上下限也读 `rangeOf()`。布尔开关行自带 `bool App::*`、点击 action 和 `effects` 位标志（persist / layoutDirty / 主题同步 / 清缓存…），面板按行绘制，`input.cpp` 只留一个 `applyToggleEffects`，不再有 `case SET_TOGGLE_*`；工具路径行自带 label/hint 和 browse action。所以“加一个布尔设置”现在是一行 schema +（必要时）一个新 effect 位，“加一个工具路径”是一行 schema + 一处 resolve 提示。仍未表驱动：TOC 左右分段、主题芯片、语言/键位下拉（需要一行对应多个 action 或动态选项），以及 `Settings{}` 里仍是实际默认值来源（schema 的 `defaultValue` 是声明，由测试比对代表性行）。见 `dev-status.md` D32。
+
 ### 6.3 快捷键是偏好的子模型
 
 快捷键不是普通字符串，而是：
@@ -148,6 +150,8 @@ CommandId + Context + KeyChord + Profile + Override
 ```
 
 设置界面捕获的是 **KeyChord**（可含 Ctrl/Shift），不是裸键；保存前做**冲突检测**（同一 context 同一 chord 不能绑两个命令）。`Esc`、快速跳转等固定键不出现在可编辑列表里，或者标记为“固定”。
+
+`[实现中]` 键位现在带 `Chord` 和 `Context`：`KeyBinding.mods`（Ctrl/Shift）负责 chord，每个 key action 另外声明 `contexts`（Home/Reader/Editor 位标志），`keyBindingConflict` 只在两份上下文相交时才判冲突，不再全表一刀切；schema 的 chord 行默认值也从 Windows 档生成。捕获、`[Keys]` 往返、重复拒绝仍走 `D34` 的路径。仍未做：override 按 action 全局生效，同一命令还不能在不同焦点绑不同键；内置固定键（`Ctrl+F/H/K`…）不参与冲突检测。
 
 ### 6.4 设置面板的交互
 

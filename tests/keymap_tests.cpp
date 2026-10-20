@@ -61,6 +61,56 @@ int main() {
     check(translateActionKey(keys, '?', true) == '?', "invalid binding retains default");
     check(!parseKeyName("F13").key && !parseKeyName("F1garbage").key,
           "malformed function-key settings are rejected");
+    // Chords: Ctrl/Shift are part of the binding, not just a gate.
+    KeyBinding chord = parseKeyName("Ctrl+Shift+K");
+    check(chord.key == 'K' && !chord.isChar && chord.mods == (kModCtrl | kModShift),
+          "Ctrl+Shift+K parses into a chord");
+    check(keyIniName(chord) == "Ctrl+Shift+K", "chord round trips through settings");
+    check(keyLabel(chord) == L"Ctrl+Shift+K", "chord has a readable label");
+    check(parseKeyName("ctrl+k").mods == kModCtrl &&
+          parseKeyName("ctrl+k").key == 'K', "chord prefixes are case-insensitive");
+    check(parseKeyName("Ctrl+").key == 0, "a bare modifier prefix is rejected");
+
+    resolveKeymap(keys, "custom", {{"toc", "Ctrl+Shift+K"}, {"search", "Ctrl+F"}});
+    check(translateActionKey(keys, 'K', false, kModCtrl | kModShift) == VK_TAB,
+          "a bound chord translates to its command");
+    check(translateActionKey(keys, 'K', false, 0) == 'K',
+          "a plain K stays the scroll binding, not the chord");
+    check(keymapHasChord(keys, 'K', false, kModCtrl | kModShift), "hasChord finds it");
+
+    // One chord, one action.
+    check(keyBindingConflict(keys, -1, {'K', false, kModCtrl | kModShift}),
+          "duplicate chord is a conflict");
+    check(!keyBindingConflict(keys, 2, {'K', false, kModCtrl | kModShift}),
+          "re-confirming the same row is not a conflict");
+    check(!keyBindingConflict(keys, -1, {'Z', false, 0}),
+          "an unused key is not a conflict");
+
+    // A custom map with no overrides equals the Windows profile: "Reset all"
+    // must not fall back to the bare command codes (':' and '?').
+    resolveKeymap(keys, "custom", {});
+    check(keys[KA_EDIT].key == 'E' && !keys[KA_EDIT].isChar, "reset: edit is E");
+    check(keys[KA_HELP].key == VK_F1 && !keys[KA_HELP].isChar, "reset: help is F1");
+    check(keys[KA_SEARCH].key == 'F' && !keys[KA_SEARCH].isChar, "reset: search is F");
+    check(keys[KA_TOC].key == VK_TAB, "reset: TOC stays Tab");
+
+    // Contexts: a chord is unique per focus, not per table. Home and the
+    // editor never coexist; two scrolling actions in the same focus do.
+    check(keyContextsOverlap(CtxHome, CtxHome), "a context overlaps itself");
+    check(keyContextsOverlap(CtxHome | CtxReader, CtxReader), "shared focus overlaps");
+    check(!keyContextsOverlap(CtxHome, CtxEditor), "Home and the editor never coexist");
+    check(!keyContextsOverlap(CtxHome | CtxReader, CtxEditor),
+          "a reader/home action does not collide with an editor one");
+    for (int i = 0; i < KEY_ACTION_COUNT; ++i) {
+        check(keyActionContexts(i) != 0, "every action declares a context");
+    }
+    check(keyContextsOverlap(keyActionContexts(KA_SCROLLUP), keyActionContexts(KA_SCROLLDOWN)),
+          "scrolling actions share a focus");
+    check(!keyContextsOverlap(keyActionContexts(KA_EDIT), CtxHome),
+          "edit is a reader action");
+    check(keyActionContexts(-1) == 0 && keyActionContexts(KEY_ACTION_COUNT) == 0,
+          "an out-of-range row has no context");
+
     std::cout << "Keymap: " << failures << " failures\n";
     return failures ? 1 : 0;
 }

@@ -53,8 +53,8 @@ std::string frontmatterSeenKey(const App& app) {
     }
     return "untitled:"+std::to_string(app.activeTab>=0&&app.activeTab<(int)app.tabs.size()?app.tabs[app.activeTab].id:0);
 }
-void persistFrontmatter(const App& app) {
-    auto settings=loadSettings();settings.frontmatter=app.frontmatter;saveSettings(settings);
+void persistFrontmatter(App& app) {
+    auto settings=loadSettings();settings.frontmatter=app.frontmatter;saveSettingsReported(app, settings);
 }
 void observeFrontmatter(App& app,const std::vector<fm::Property>& properties) {
     auto key=frontmatterSeenKey(app);

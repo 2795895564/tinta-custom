@@ -6,7 +6,7 @@ enum FrontmatterAction {
     FM_PICK=7000, FM_LIMIT_DOWN=7100, FM_LIMIT_UP,
     FM_ROW=10000 // row * 8 + drag, show, left, right, label, format
 };
-void persistFrontmatter(const App& app);
+void persistFrontmatter(App& app);
 void observeFrontmatter(App& app, const std::vector<fm::Property>& properties);
 std::string frontmatterSeenKey(const App& app);
 void renderFrontmatterSettings(App& app, const D2D1_RECT_F& area);

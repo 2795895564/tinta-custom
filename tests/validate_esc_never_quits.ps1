@@ -118,6 +118,40 @@ try {
     Close $process
 }
 
+# Reader overlays: Esc closes one layer, then climbs to Home. Opening a panel
+# must not turn the first Esc into "quit" or into "jump straight Home".
+Write-Settings $true
+$process = Start-Process -FilePath (Join-Path $appDir 'tinta.exe') -PassThru
+try {
+    $hwnd = Wait-Window $process
+    Key $hwnd 0x0D                    # open a.md
+    Key $hwnd 0x46                    # F opens the search panel
+    Key $hwnd 0x1B                    # first Esc: close search only
+    $process.Refresh()
+    if (Expect-Alive $process 'Reader search, first Esc') { $passed++ } else { $failures++ }
+    if ($process.MainWindowTitle -notmatch 'a\.md') {
+        "FAIL  reader overlay : first Esc left the reader ($($process.MainWindowTitle))"
+        $failures++
+    } else {
+        "PASS  reader overlay : search closed, reader stayed"
+        $passed++
+    }
+    Key $hwnd 0x1B                    # second Esc: back to Home
+    $process.Refresh()
+    if ($process.MainWindowTitle -match 'a\.md') {
+        "FAIL  reader overlay : second Esc did not reach Home ($($process.MainWindowTitle))"
+        $failures++
+    } else {
+        "PASS  reader overlay : second Esc reached Home"
+        $passed++
+    }
+} catch {
+    "FAIL  reader overlay pass: $_"
+    $failures++
+} finally {
+    Close $process
+}
+
 # Picker with no repositories
 Write-Settings $false
 $process = Start-Process -FilePath (Join-Path $appDir 'tinta.exe') -PassThru

@@ -1,4 +1,6 @@
 #include "settings.h"
+#include "settings_schema.h"
+#include "signals.h"
 #include "document.h"
 #include "i18n.h"
 
@@ -26,7 +28,13 @@ std::wstring getSettingsPath() {
     return dir + L"\\settings.ini";
 }
 
-bool saveSettings(const Settings& settings) {
+bool saveSettings(const Settings& input) {
+    // The schema owns the legal ranges: a value that came from a stale ini,
+    // a hand edit or a UI bug is clamped here instead of being written back.
+    Settings sanitized = input;
+    schema::sanitize(sanitized);
+    const Settings& settings = sanitized;
+
     std::wstring path = getSettingsPath();
     if (path.empty()) return false;
 
@@ -67,11 +75,6 @@ bool saveSettings(const Settings& settings) {
     file << "readingWidthPct=" << settings.readingWidthPct << "\n";
     file << "zenWidthPct=" << settings.zenWidthPct << "\n";
     file << "headingRules=" << (settings.headingRules ? 1 : 0) << "\n";
-    file << "tocOnLeft=" << (settings.tocOnLeft ? 1 : 0) << "\n";
-    file << "tocPinned=" << (settings.tocPinned ? 1 : 0) << "\n";
-    file << "browserPinned=" << (settings.browserPinned ? 1 : 0) << "\n";
-    file << "tocWidth=" << settings.tocWidth << "\n";
-    file << "browserWidth=" << settings.browserWidth << "\n";
     file << "language=" << settings.language << "\n";
     file << "keyProfile=" << settings.keyProfile << "\n";
     file << "checkUpdates=" << (settings.checkUpdates ? 1 : 0) << "\n";
@@ -91,8 +94,13 @@ bool saveSettings(const Settings& settings) {
 
     file << "[Keys]\n";
     file << "; single letters/digits, Tab, Space, F1-F12, or one character\n";
+    // Write the binding the user actually has: an unmodified custom map is
+    // the Windows set (E and F1), not the bare command codes (':' and '?').
+    const int stockProfile = keyProfileIndexById("windows");
     for (int i = 0; i < KEY_ACTION_COUNT; i++) {
-        std::string value = keyIniName({KEY_ACTIONS[i].defaultKey, KEY_ACTIONS[i].isChar});
+        std::string value = stockProfile >= 0
+            ? keyIniName(KEY_PROFILES[stockProfile].keys[i])
+            : keyIniName({KEY_ACTIONS[i].defaultKey, KEY_ACTIONS[i].isChar});
         for (const auto& kv : settings.keyOverrides) {
             if (kv.first == KEY_ACTIONS[i].name) { value = kv.second; break; }
         }
@@ -167,48 +175,48 @@ void persistReadingPosition(const std::string& path, float scrollY,
 
 // The editor assists toggle persists immediately so fresh windows pick
 // it up without waiting for this one's exit save
-void persistEditorMode(const App& app) {
+void persistEditorMode(App& app) {
     Settings settings = loadSettings();
     settings.editorAssists = app.editorAssists;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
 // The word count (#240) and "Close without asking" (#252) switches
 // persist on their own the moment they change, and the exit save leaves
 // them as on disk: an older window must not write back a value another
 // window changed since
-void persistWordCount(const App& app) {
+void persistWordCount(App& app) {
     Settings settings = loadSettings();
     settings.showWordCount = app.showWordCount;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
-void persistEditorCentering(const App& app) {
+void persistEditorCentering(App& app) {
     Settings settings = loadSettings();
     settings.editorCenterCaret = app.editorCenterCaret;
     settings.editorCaretCenterRatio = app.editorCaretCenterRatio;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
-void persistCloseKeepsDrafts(const App& app) {
+void persistCloseKeepsDrafts(App& app) {
     Settings settings = loadSettings();
     settings.closeKeepsDrafts = app.closeKeepsDrafts;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
-void persistPrintMargin(const App& app) {
+void persistPrintMargin(App& app) {
     Settings settings = loadSettings();
     settings.printMarginMm = app.printMarginMm;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
 // The results panel's scope chips (#246) keep their state for the next
 // search and the next window
-void persistSearchScopes(const App& app) {
+void persistSearchScopes(App& app) {
     Settings settings = loadSettings();
     settings.folderSearchEnabled = app.folderSearchEnabled;
     settings.tabSearchEnabled = app.tabSearchEnabled;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
 // "Open files in tabs" persists the moment it is toggled: the join-or-
@@ -216,30 +224,30 @@ void persistSearchScopes(const App& app) {
 // settings.ini, so an exit-time save would leave every Explorer open on
 // the old mode until all windows closed (#147 follow-up). The ini is the
 // single source of truth for this flag - the exit save leaves it alone.
-void persistOpenInTabs(const App& app) {
+void persistOpenInTabs(App& app) {
     Settings settings = loadSettings();
     settings.openInTabs = app.openInTabs;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
 // The startup screen is chosen by the next process, so write it at toggle
 // time; the exit save preserves whatever is on disk.
-bool persistStartupMode(const App& app) {
+bool persistStartupMode(App& app) {
     Settings settings = loadSettings();
     settings.startupMode = app.startupMode;
-    return saveSettings(settings);
+    return saveSettingsReported(app, settings);
 }
 
 // A theme change persists immediately: windows spawned afterwards
 // (quick notes, drag-outs) read settings.ini at startup and would
 // otherwise come up in the look from the previous session
-void persistThemeChoice(const App& app) {
+void persistThemeChoice(App& app) {
     Settings settings = loadSettings();
     settings.themeIndex = app.currentThemeIndex;
     settings.followSystemTheme = app.followSystemTheme;
     settings.lightThemeIndex = app.lightThemeIndex;
     settings.darkThemeIndex = app.darkThemeIndex;
-    saveSettings(settings);
+    saveSettingsReported(app, settings);
 }
 
 // Start page recents: every successful document open moves (or inserts)
@@ -282,6 +290,16 @@ float findReadingZoom(const Settings& settings, const std::string& path) {
         if (_stricmp(pos.path.c_str(), path.c_str()) == 0) return pos.zoom;
     }
     return 0.0f;
+}
+
+bool saveSettingsReported(App& app, const Settings& settings) {
+    if (saveSettings(settings)) return true;
+    // Invariant 7: never swallow the failure. The chip points at the real
+    // cause (read-only or locked settings.ini) instead of pretending it saved.
+    if (app.hwnd) {
+        signalPushKey(app, SIG_ERROR, SIGI_WARNING, "toast.settings_failed");
+    }
+    return false;
 }
 
 Settings loadSettings() {
@@ -338,22 +356,6 @@ Settings loadSettings() {
             if (w >= 30 && w <= 100) settings.zenWidthPct = w;
         } else if (key == "headingRules") {
             settings.headingRules = (value == "1");
-        } else if (key == "tocOnLeft") {
-            settings.tocOnLeft = (value == "1");
-        } else if (key == "tocPinned") {
-            settings.tocPinned = (value == "1");
-        } else if (key == "browserPinned") {
-            settings.browserPinned = (value == "1");
-        } else if (key == "tocWidth" || key == "browserWidth") {
-            try {
-                size_t consumed = 0;
-                const float width = std::stof(value, &consumed);
-                if (consumed == value.size() && std::isfinite(width) &&
-                    width >= (key == "tocWidth" ? 180.0f : 200.0f) && width <= 4000.0f) {
-                    if (key == "tocWidth") settings.tocWidth = width;
-                    else settings.browserWidth = width;
-                }
-            } catch (const std::exception&) { /* Keep the default for malformed widths. */ }
         } else if (key == "language") {
             if (!value.empty()) settings.language = value;  // "auto" or an id
         } else if (key == "keyProfile") {

@@ -14,6 +14,8 @@
 #include "search_panel.h"
 #include "d2d_init.h"
 #include "settings.h"
+#include "settings_schema.h"
+#include "settings_keys.h"
 #include "render.h"
 #include "overlays.h"
 #include "sidepanels.h"
@@ -22,6 +24,8 @@
 #include "pandoc.h"
 #include "plantuml_app.h"
 #include "preview_follow.h"
+#include "escape.h"
+#include "commands.h"
 #include "print.h"
 #include "export.h"
 #include "i18n.h"
@@ -326,30 +330,6 @@ static void launchDocumentWindow(const std::wstring& fullPath) {
     ShellExecuteW(nullptr, L"open", exePath, params.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
-// N key / context menu: open the folder browser with the new-file naming
-// row already active
-static void startNewFileFlow(App& app, HWND hwnd) {
-    if (!app.showFolderBrowser) {
-        app.showFolderBrowser = true;
-        app.folderBrowserAnimation = 0;
-        if (!app.currentFile.empty()) {
-            app.folderBrowserPath = getDirectoryFromFile(app.currentFile);
-        } else {
-            app.folderBrowserPath = launchDirectory();
-        }
-        populateFolderItems(app);
-    }
-    app.folderBrowserNaming = 1;  // new file
-    app.folderBrowserInput.clear();
-    app.folderBrowserInputSelectAll = false;
-    app.folderBrowserInputError = false;
-    app.folderInputJustOpened = true;
-    app.folderBrowserScroll = 0.0f;
-    updateBlinkTimer(app);
-    resetCursorBlink(app);
-    InvalidateRect(hwnd, nullptr, FALSE);
-}
-
 // --- Folder browser path/name input (#52) ---
 
 static void closeFolderBrowserInput(App& app) {
@@ -646,6 +626,17 @@ static void settingsSliderApply(App& app, int which, float mx) {
 static void shortcutAssign(App& app, KeyBinding key) {
     int row = app.shortcutEditorRow;
     if (row < 0 || row >= KEY_ACTION_COUNT) return;
+    // One chord, one action: refuse a duplicate and keep the row armed so the
+    // user can press another key straight away.
+    switch (settingskeys::captureBinding(app.keymap, row, key)) {
+        case settingskeys::CaptureOutcome::Ignored:
+            return;
+        case settingskeys::CaptureOutcome::Conflict:
+            signalPushKey(app, SIG_WARN, SIGI_WARNING, "shortcuts.editor.conflict");
+            return;
+        case settingskeys::CaptureOutcome::Bound:
+            break;
+    }
     std::string value = keyIniName(key);
     bool found = false;
     for (auto& kv : app.keyOverrides) {
@@ -663,17 +654,54 @@ static void shortcutAssign(App& app, KeyBinding key) {
     app.shortcutEditorRow = -1;
 }
 
+// Chord modifiers currently held; Alt is never part of a binding.
+static unsigned keymapMods() {
+    unsigned mods = 0;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= kModCtrl;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= kModShift;
+    return mods;
+}
+
 static void closeSettings(App& app, HWND hwnd) {
     app.showSettings = false;
     app.settingsAnimation = 0;
     app.settingsLangOpen = false;
     app.settingsKeysOpen = false;
+    app.shortcutEditorRow = -1;
     app.settingsDragSlider = 0;
     app.settingsHits.clear();
     app.settingsSaveError.clear();
     app.frontmatterMenu = app.frontmatterDrag = app.frontmatterDrop = -1;
     if (GetCapture() == hwnd) ReleaseCapture();
     InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// The schema says which work follows a toggle; this is the only place that
+// knows how to do it. Adding a boolean setting that reuses existing behaviour
+// is one schema row, and a genuinely new follow-up adds one bit here.
+static void applyToggleEffects(App& app, HWND hwnd, unsigned effects) {
+    if (effects & schema::FxThemeSync) {
+        if (app.followSystemTheme) {
+            if (app.theme.isDark) app.darkThemeIndex = app.currentThemeIndex;
+            else app.lightThemeIndex = app.currentThemeIndex;
+            PostMessageW(hwnd, WM_SETTINGCHANGE, 0, (LPARAM)L"ImmersiveColorSet");
+        }
+    }
+    if (effects & schema::FxClearLayoutCache) app.clearEditorLineLayoutCache();
+    if (effects & schema::FxLayoutDirty) app.layoutDirty = true;
+    if (effects & schema::FxPreviewReset) previewFollowReset(app);
+    if (effects & schema::FxDocCountsStale) app.editorDocCountsStale = true;
+    if (effects & schema::FxPersistEditorMode) persistEditorMode(app);
+    if (effects & schema::FxPersistWordCount) persistWordCount(app);
+    if (effects & schema::FxPersistCloseDrafts) persistCloseKeepsDrafts(app);
+    if (effects & schema::FxPersistCentering) persistEditorCentering(app);
+    if (effects & schema::FxPersistOpenInTabs) persistOpenInTabs(app);
+    if (effects & schema::FxClearFolderSearch) {
+        if (!app.folderSearchEnabled) clearFolderSearch(app);
+    }
+    if (effects & schema::FxPinCaret) {
+        if (app.editMode) editorPinCaret(app);
+    }
 }
 
 static void settingsAction(App& app, HWND hwnd, int action) {
@@ -711,25 +739,24 @@ static void settingsAction(App& app, HWND hwnd, int action) {
     }
     if (action != SET_LANG_DROPDOWN) app.settingsLangOpen = false;
     if (action != SET_KEYS_DROPDOWN) app.settingsKeysOpen = false;
+    // Toggles are table-driven: the row owns the App field and the follow-up
+    // work, so no per-setting case lives in the switch below.
+    if (const schema::Row* toggle =
+            schema::findByAction(static_cast<SettingsAction>(action));
+        toggle && toggle->boolField) {
+        app.*(toggle->boolField) = !(app.*(toggle->boolField));
+        applyToggleEffects(app, hwnd, toggle->effects);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
     switch (action) {
         case SET_CLOSE: closeSettings(app, hwnd); return;
-        case SET_SECTION_GENERAL: app.settingsSection = 0; break;
-        case SET_SECTION_APPEARANCE: app.settingsSection = 1; break;
-        case SET_SECTION_EDITOR: app.settingsSection = 2; app.frontmatterMenu = -1; break;
-        case SET_SECTION_FRONTMATTER: app.settingsSection = 3; break;
-        case SET_TOGGLE_FOLDERSEARCH:
-            app.folderSearchEnabled = !app.folderSearchEnabled;
-            if (!app.folderSearchEnabled) clearFolderSearch(app);
-            break;
-        case SET_TOGGLE_BROWSEFOCUS:
-            app.browserFocusPath = !app.browserFocusPath;
-            break;
-        case SET_TOGGLE_OPENTABS:
-            app.openInTabs = !app.openInTabs;
-            // Takes effect for the very next Explorer open, no window
-            // closing required; also keeps older windows' exit saves
-            // from clobbering it (they no longer write this flag)
-            persistOpenInTabs(app);
+        case SET_SECTION_GENERAL: case SET_SECTION_APPEARANCE: case SET_SECTION_EDITOR:
+        case SET_SECTION_FRONTMATTER: case SET_SECTION_KEYS:
+            app.settingsSection =
+                settingskeys::sectionForAction(static_cast<SettingsAction>(action));
+            app.frontmatterMenu = -1;
+            app.shortcutEditorRow = -1;
             break;
         case SET_STARTUP_LAST:
             app.startupMode = 0;
@@ -744,25 +771,6 @@ static void settingsAction(App& app, HWND hwnd, int action) {
             if (!persistStartupMode(app))
                 app.settingsSaveError =
                     L"Could not save settings: " + getSettingsPath();
-            break;
-        case SET_TOGGLE_ASSISTS:
-            app.editorAssists = !app.editorAssists;
-            persistEditorMode(app);
-            break;
-        case SET_TOGGLE_WORDCOUNT:
-            app.showWordCount = !app.showWordCount;
-            app.editorDocCountsStale = true;
-            persistWordCount(app);
-            break;
-        case SET_TOGGLE_CLOSE_DRAFTS:
-            app.closeKeepsDrafts = !app.closeKeepsDrafts;
-            persistCloseKeepsDrafts(app);
-            break;
-        case SET_TOGGLE_HEADRULES:
-            app.headingRules = !app.headingRules;
-            // Layout shifts (the rule adds height), so a repaint alone
-            // is not enough
-            app.layoutDirty = true;
             break;
         case SET_LOCATE_PANDOC: {
             wchar_t path[MAX_PATH]{};
@@ -801,29 +809,6 @@ static void settingsAction(App& app, HWND hwnd, int action) {
             }
             break;
         }
-        case SET_TOGGLE_FOLLOW:
-            app.followSystemTheme = !app.followSystemTheme;
-            if (app.followSystemTheme) {
-                if (app.theme.isDark) app.darkThemeIndex = app.currentThemeIndex;
-                else app.lightThemeIndex = app.currentThemeIndex;
-                PostMessageW(hwnd, WM_SETTINGCHANGE, 0, (LPARAM)L"ImmersiveColorSet");
-            }
-            break;
-        case SET_TOGGLE_WRAP:
-            app.editorWordWrap = !app.editorWordWrap;
-            app.clearEditorLineLayoutCache();
-            break;
-        case SET_TOGGLE_PREVIEW:
-            app.editorShowPreview = !app.editorShowPreview;
-            app.layoutDirty = true;
-            previewFollowReset(app);
-            break;
-        case SET_TOGGLE_CENTER_CARET:
-            app.editorCenterCaret = !app.editorCenterCaret;
-            persistEditorCentering(app);
-            if (app.editMode) editorPinCaret(app);
-            InvalidateRect(hwnd, nullptr, FALSE);
-            break;
         case SET_OPEN_THEMES:
             app.showSettings = false;
             app.showThemeChooser = true;
@@ -835,7 +820,6 @@ static void settingsAction(App& app, HWND hwnd, int action) {
         case SET_EDIT_THEME:
             openThemeEditor(app, true);
             break;
-        case SET_TOC_LEFT: app.tocOnLeft = true; break;
         case SET_LANG_DROPDOWN:
             app.settingsLangOpen = !app.settingsLangOpen;
             break;
@@ -847,7 +831,6 @@ static void settingsAction(App& app, HWND hwnd, int action) {
             app.showShortcutEditor = true;
             app.shortcutEditorRow = -1;
             break;
-        case SET_TOC_RIGHT: app.tocOnLeft = false; break;
         case SET_OPEN_INI:
             ShellExecuteW(nullptr, L"open", configFilePathForShell(getSettingsPath()).c_str(),
                           nullptr, nullptr, SW_SHOWNORMAL);
@@ -1739,7 +1722,8 @@ static void invokeContextMenuAction(App& app, HWND hwnd, int item) {
             break;
         case CTX_NEW:
             closeSearchIfOpen(app);
-            startNewFileFlow(app, hwnd);
+            // The folder browser is gone: a new file starts as a quick note.
+            tabOpenQuickNote(app, hwnd);
             break;
         case CTX_PRINT:
             closeSearchIfOpen(app);
@@ -1759,25 +1743,8 @@ static void invokeContextMenuAction(App& app, HWND hwnd, int item) {
             openSearchInput(app);
             break;
         case CTX_TOC:
-            closeSearchIfOpen(app);
-            ensureLayoutComplete(app);
-            app.showToc = true;
-            app.tocAnimation = 0;
-            app.tocScroll = 0;
-            app.tocFilter.clear();
-            app.hoveredTocIndex = -1;
-            break;
         case CTX_BROWSE:
-            closeSearchIfOpen(app);
-            app.showFolderBrowser = true;
-            closeFolderBrowserInput(app);
-            app.folderBrowserAnimation = 0;
-            if (!app.currentFile.empty()) {
-                app.folderBrowserPath = getDirectoryFromFile(app.currentFile);
-            } else {
-                app.folderBrowserPath = launchDirectory();
-            }
-            populateFolderItems(app);
+            // Both side panels were removed; the menu entries are gone too.
             break;
         case CTX_COPY_PATH:
             copyFilePath(app, hwnd, app.currentFile);
@@ -2516,13 +2483,9 @@ static void startPageInvoke(App& app, HWND hwnd, int id) {
         }
         updateWindowTitle(app);
     } else if (id == 3) {
-        if (!app.showFolderBrowser) {
-            closeSearchIfOpen(app);
-            app.showFolderBrowser = true;
-            app.folderBrowserAnimation = 0;
-            app.folderBrowserPath = launchDirectory();
-            populateFolderItems(app);
-        }
+        // The folder browser panel is gone: the start-page action opens the
+        // system file dialog instead.
+        openFileDialog(app, hwnd);
     } else if (id == 4) {
         clearRecentFiles();
         app.startPageRecents.clear();
@@ -2913,7 +2876,8 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
     }
 
     // Shortcut editor clicks: arm a row for capture, reset, or close
-    if (app.showShortcutEditor) {
+    const bool keysPage = app.showSettings && app.settingsSection == settingskeys::SectionKeys;
+    if (app.showShortcutEditor || keysPage) {
         float mx = (float)GET_X_LPARAM(lParam);
         float my = (float)GET_Y_LPARAM(lParam);
         for (const auto& hit : app.shortcutHits) {
@@ -2932,13 +2896,18 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return;
         }
-        // Click outside the rows: close back to settings
-        app.showShortcutEditor = false;
+        if (app.showShortcutEditor) {
+            // Click outside the rows: close back to settings
+            app.showShortcutEditor = false;
+            app.shortcutEditorRow = -1;
+            app.showSettings = true;
+            app.settingsAnimation = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
+        // Keys page: a click outside the rows only disarms; rail clicks fall
+        // through to the normal settings hit handling.
         app.shortcutEditorRow = -1;
-        app.showSettings = true;
-        app.settingsAnimation = 0;
-        InvalidateRect(hwnd, nullptr, FALSE);
-        return;
     }
 
     // Theme editor clicks
@@ -3563,23 +3532,84 @@ static void toggleZenMode(App& app, HWND hwnd) {
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// The only mapping from app state to the Esc layer table. A new overlay adds
+// one line here and one entry in include/escape.h; it does not add another
+// `if (wParam == VK_ESCAPE)` branch.
+static esc::Levels escapeLevels(const App& app) {
+    esc::Levels levels;
+    if (app.quickJump.open) levels = levels.with(esc::Layer::QuickJump);
+    if (app.appMenuPressed) levels = levels.with(esc::Layer::AppMenu);
+    if (app.panelResize.panel != SidePanel::None) levels = levels.with(esc::Layer::PanelResize);
+    if (app.showLightbox) levels = levels.with(esc::Layer::Lightbox);
+    if (app.annotEditorOpen) levels = levels.with(esc::Layer::AnnotationEditor);
+    if (app.createRefPending) levels = levels.with(esc::Layer::CreateReference);
+    if (app.showPrintPreview) levels = levels.with(esc::Layer::PrintPreview);
+    if (app.showContextMenu) levels = levels.with(esc::Layer::ContextMenu);
+    if (app.showShortcutEditor) {
+        levels = levels.with(esc::Layer::ShortcutEditor);
+        // An armed row captures the next key: Esc disarms before it closes.
+        if (app.shortcutEditorRow >= 0) levels = levels.with(esc::Layer::ShortcutCapture);
+    }
+    // The Keys section arms rows in place; the same capture layer applies.
+    if (app.showSettings && app.settingsSection == settingskeys::SectionKeys && app.shortcutEditorRow >= 0) {
+        levels = levels.with(esc::Layer::ShortcutCapture);
+    }
+    if (app.showThemeEditor) levels = levels.with(esc::Layer::ThemeEditor);
+    if (app.showSettings) levels = levels.with(esc::Layer::Settings);
+    if (app.showHelp) levels = levels.with(esc::Layer::Help);
+    if (app.showThemeChooser) levels = levels.with(esc::Layer::ThemeChooser);
+    if (app.showTabSwitcher) levels = levels.with(esc::Layer::TabSwitcher);
+    if (app.tabDragIndex >= 0) levels = levels.with(esc::Layer::TabDrag);
+    if (app.showTabMenu) levels = levels.with(esc::Layer::TabMenu);
+    if (app.showFolderBrowser &&
+        (app.folderBrowserEditingPath || app.folderBrowserNaming != 0)) {
+        levels = levels.with(esc::Layer::FolderBrowserInput);
+    }
+    if (app.showSearch) levels = levels.with(esc::Layer::Search);
+    if (app.showFolderBrowser) levels = levels.with(esc::Layer::FolderBrowser);
+    if (app.showToc) levels = levels.with(esc::Layer::Toc);
+    if (app.zenMode) levels = levels.with(esc::Layer::Zen);
+    if (app.editMode) levels = levels.with(esc::Layer::Editor);
+    else if (startPageActive(app)) levels = levels.with(esc::Layer::Home);
+    else levels = levels.with(esc::Layer::Reader);
+    return levels;
+}
+
 bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     // Typing, scrolling and clicking all put the tab hover card away
     tabHoverCardDismiss(app, hwnd);
+    // Esc has exactly one owner (include/escape.h). Every branch below
+    // acts only when the table names it; branch order no longer defines
+    // priority.
+    const esc::Layer escOwner =
+        (wParam == VK_ESCAPE) ? esc::decide(escapeLevels(app)).layer
+                              : esc::Layer::None;
     // The palette is an overlay above Home/Document. Command keys return true;
     // printable keys return false so the message loop's TranslateMessage still
     // produces the WM_CHAR that feeds the query field.
-    if (app.quickJump.open)
+    if (app.quickJump.open) {
+        // The palette answers every key while open; Esc still belongs to
+        // the topmost layer, so a higher overlay keeps it.
+        if (wParam == VK_ESCAPE && escOwner != esc::Layer::QuickJump) return false;
         return quickJumpKeyDown(app, hwnd, wParam);
+    }
     // Ctrl+Alt+Up/Down add editor carets (#251) before the AltGr guard
     if (editorAltArrowKey(app, hwnd, wParam)) return true;
-    if (!shortcutModifiersAllowed(static_cast<unsigned>(wParam))) return false;
+    // Alt belongs to the keyboard layout. A Ctrl/Shift chord passes the
+    // built-in shortlist only when [Keys] actually binds it, so a remap to
+    // Ctrl+Shift+K is reachable without loosening the default gate.
+    const unsigned chordMods = keymapMods();
+    if ((GetKeyState(VK_MENU) & 0x8000) ||
+        (!shortcutModifiersAllowed(static_cast<unsigned>(wParam)) &&
+         !keymapHasChord(app.keymap, (unsigned)wParam, false, chordMods))) {
+        return false;
+    }
     if (app.appMenuPressed) {
-        if (wParam == VK_ESCAPE) cancelAppMenuPress(app, hwnd);
+        if (escOwner == esc::Layer::AppMenu) cancelAppMenuPress(app, hwnd);
         return true;
     }
     if (app.panelResize.panel != SidePanel::None) {
-        if (wParam == VK_ESCAPE) sidePanelResizeEnd(app, hwnd, true);
+        if (escOwner == esc::Layer::PanelResize) sidePanelResizeEnd(app, hwnd, true);
         return true;
     }
     float pageSize = app.height * 0.8f;
@@ -3588,8 +3618,8 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
 
     // Lightbox: dismiss keys close it, everything else is swallowed
     if (app.showLightbox) {
-        if (wParam == VK_ESCAPE || wParam == VK_RETURN ||
-            wParam == VK_SPACE) {
+        if ((wParam == VK_ESCAPE && escOwner == esc::Layer::Lightbox) ||
+            wParam == VK_RETURN || wParam == VK_SPACE) {
             closeLightbox(app);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
@@ -3609,7 +3639,8 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             app.swallowCharsUntil = std::chrono::steady_clock::now() +
                                     std::chrono::milliseconds(150);
             createRefAction(app, hwnd, 1);
-        } else if (wParam == 'N' || wParam == VK_ESCAPE) {
+        } else if (wParam == 'N' ||
+                   (wParam == VK_ESCAPE && escOwner == esc::Layer::CreateReference)) {
             app.swallowCharsUntil = std::chrono::steady_clock::now() +
                                     std::chrono::milliseconds(150);
             createRefAction(app, hwnd, 2);
@@ -3621,7 +3652,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     if (app.showPrintPreview) {
         switch (wParam) {
             case VK_ESCAPE:
-                closePrintPreview(app, hwnd);
+                if (escOwner == esc::Layer::PrintPreview) closePrintPreview(app, hwnd);
                 break;
             case VK_RETURN:
                 printPreviewConfirm(app, hwnd);
@@ -3646,7 +3677,8 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     }
 
     if (!app.confirmExitPending && app.showContextMenu) {
-        if (wParam == VK_ESCAPE || wParam == VK_F10) {
+        if ((wParam == VK_ESCAPE && escOwner == esc::Layer::ContextMenu) ||
+            wParam == VK_F10) {
             closeContextMenu(app);
         } else if (wParam == VK_DOWN || wParam == VK_UP ||
                    wParam == VK_HOME || wParam == VK_END) {
@@ -3668,7 +3700,9 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     // Shortcut editor: an armed row captures the next key; Esc cancels
     // the capture, then closes back to settings
     if (app.showShortcutEditor) {
-        if (wParam == VK_ESCAPE) {
+        // An armed row (capture) answers before the editor itself.
+        if (escOwner == esc::Layer::ShortcutCapture ||
+            escOwner == esc::Layer::ShortcutEditor) {
             if (app.shortcutEditorRow >= 0) {
                 app.shortcutEditorRow = -1;
             } else {
@@ -3677,39 +3711,49 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 app.settingsAnimation = 0;
             }
         } else if (app.shortcutEditorRow >= 0) {
-            unsigned key = 0;
-            if (wParam == VK_TAB || wParam == VK_SPACE ||
-                (wParam >= VK_F1 && wParam <= VK_F12) ||
-                (wParam >= 'A' && wParam <= 'Z') ||
-                (wParam >= '0' && wParam <= '9')) {
-                key = (unsigned)wParam;
+            if (settingskeys::acceptsCaptureKey((unsigned)wParam)) {
+                shortcutAssign(app, {(unsigned)wParam, false, keymapMods()});
             }
-            if (key) shortcutAssign(app, {(unsigned)key, false});
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return false;
     }
     // Theme editor: Esc returns to settings; text arrives via WM_CHAR
     if (app.showThemeEditor) {
-        if (wParam == VK_ESCAPE) closeThemeEditor(app, true);
+        if (escOwner == esc::Layer::ThemeEditor) closeThemeEditor(app, true);
+        return false;
+    }
+    // Keys section: an armed row captures the next key; Esc disarms it. The
+    // list itself lives in the settings panel (overlays.cpp), so the same
+    // capture rules as the standalone editor apply here.
+    if (app.showSettings && app.settingsSection == settingskeys::SectionKeys && app.shortcutEditorRow >= 0) {
+        if (escOwner == esc::Layer::ShortcutCapture) {
+            app.shortcutEditorRow = -1;
+        } else {
+            if (settingskeys::acceptsCaptureKey((unsigned)wParam)) {
+                shortcutAssign(app, {(unsigned)wParam, false, keymapMods()});
+            }
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
         return false;
     }
     // Settings overlay captures the keyboard while open
     if (app.showSettings) {
-        if (wParam == VK_ESCAPE && (app.frontmatterMenu >= 0 || app.frontmatterDrag >= 0)) {
+        if (escOwner == esc::Layer::Settings &&
+            (app.frontmatterMenu >= 0 || app.frontmatterDrag >= 0)) {
             app.frontmatterMenu = app.frontmatterDrag = app.frontmatterDrop = -1;
             if (GetCapture() == hwnd) ReleaseCapture();
             InvalidateRect(hwnd, nullptr, FALSE);
             return false;
         }
-        if (wParam == VK_ESCAPE || (ctrl && wParam == VK_OEM_COMMA)) {
+        if (escOwner == esc::Layer::Settings || (ctrl && wParam == VK_OEM_COMMA)) {
             closeSettings(app, hwnd);
         }
         return false;
     }
 
     if (app.showHelp || app.showThemeChooser) {
-        if (wParam == VK_ESCAPE ||
+        if (escOwner == esc::Layer::Help || escOwner == esc::Layer::ThemeChooser ||
             (!ctrl && app.showHelp && keyBindingMatches(app.keymap[KA_HELP], (unsigned)wParam, false)) ||
             (!ctrl && app.showThemeChooser && keyBindingMatches(app.keymap[KA_THEME], (unsigned)wParam, false))) {
             if (app.themeChooserPreviewBase >= 0) {
@@ -3741,11 +3785,13 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         !app.editMode && !app.showSearch && !app.confirmExitPending) {
         if (homeOnKeyDown(app, hwnd, wParam)) return true;
     }
-    // Ctrl+K opens the palette from Home, reading and editing. It is fixed
-    // (not in the remappable key table) and never steals a modal/overlay.
-    if (ctrl && wParam == 'K' && !app.confirmExitPending && !app.showSearch &&
-        !app.showTabSwitcher && !app.showTabMenu &&
-        app.home.dialog == HomeDialogKind::None) {
+    // Quick Jump is ordinary keymap data now: the palette opens on the bound
+    // chord (Ctrl+K by default) from Home, reading and editing, and never
+    // steals a modal/overlay.
+    if (keyBindingMatches(app.keymap[KA_QUICKJUMP], (unsigned)wParam, false,
+                          keymapMods()) &&
+        !app.confirmExitPending && !app.showSearch && !app.showTabSwitcher &&
+        !app.showTabMenu && app.home.dialog == HomeDialogKind::None) {
         quickJumpOpen(app, hwnd);
         return true;
     }
@@ -3802,19 +3848,19 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             return false;
         }
     }
-    if (app.showTabSwitcher && wParam == VK_ESCAPE) {
+    if (app.showTabSwitcher && escOwner == esc::Layer::TabSwitcher) {
         app.showTabSwitcher = false;
         InvalidateRect(hwnd, nullptr, FALSE);
         return false;
     }
     // Esc aborts a tab drag in flight (ghost vanishes, tab snaps home)
-    if (app.tabDragIndex >= 0 && wParam == VK_ESCAPE) {
+    if (app.tabDragIndex >= 0 && escOwner == esc::Layer::TabDrag) {
         tabDragCancel(app, hwnd);
         return false;
     }
     // An open tab menu takes Esc before anything else (edit mode too —
     // the strip stays interactive while editing)
-    if (app.showTabMenu && wParam == VK_ESCAPE) {
+    if (app.showTabMenu && escOwner == esc::Layer::TabMenu) {
         closeTabMenu(app);
         InvalidateRect(hwnd, nullptr, FALSE);
         return false;
@@ -3835,7 +3881,11 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     // (#246). The editor has no side panels, and the chord never stands in
     // for Ctrl+F (#235).
     bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    if (ctrl && shiftDown && wParam == 'F' && !app.editMode &&
+    // Ctrl+Shift chords are rows in include/commands.h; handlers ask for the
+    // command instead of re-testing the modifiers themselves.
+    const cmd::Chord chord{static_cast<unsigned>(wParam),
+                           (ctrl ? cmd::Ctrl : 0u) | (shiftDown ? cmd::Shift : 0u)};
+    if (cmd::resolve(chord) == cmd::Command::SearchPanel && !app.editMode &&
         !app.confirmExitPending) {
         openSearchPanel(app);
         return true;
@@ -3899,7 +3949,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         } else if (!ctrl) {
             switch (wParam) {
                 case VK_ESCAPE:
-                    closeFolderBrowserInput(app);
+                    if (escOwner == esc::Layer::FolderBrowserInput) closeFolderBrowserInput(app);
                     break;
                 case VK_RETURN:
                     if (app.folderBrowserEditingPath) commitFolderBrowserPath(app);
@@ -3932,7 +3982,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 // Ctrl+Shift+S: save the viewed file under a new name and
                 // continue there (#121); plain Ctrl+S stays a no-op in the
                 // viewer — there is nothing edited to save
-                if (GetKeyState(VK_SHIFT) & 0x8000) {
+                if (cmd::resolve(chord) == cmd::Command::SaveAs) {
                     saveFileAs(app, hwnd);
                 }
                 break;
@@ -3941,7 +3991,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 // (the launcher or an empty tab is taken over in place, a
                 // document gets a fresh note tab); Ctrl+Shift+N spawns a
                 // separate window
-                if (GetKeyState(VK_SHIFT) & 0x8000) {
+                if (cmd::resolve(chord) == cmd::Command::NewWindow) {
                     launchQuickNoteWindow();
                 } else if (app.currentFile.empty()) {
                     // The keystroke's WM_CHAR must not type into the
@@ -4065,7 +4115,7 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             }
         }
 
-        wParam = translateActionKey(app.keymap, (unsigned)wParam, false);
+        wParam = translateActionKey(app.keymap, (unsigned)wParam, false, keymapMods());
         switch (wParam) {
             case ':':
             case '?':
@@ -4083,47 +4133,64 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                     return true;
                 }
                 break;
-            case VK_ESCAPE:
-                // Priority: ContextMenu > Help > Search > FolderBrowser > TOC > Theme chooser > Quit
-                if (app.showContextMenu) {
-                    app.showContextMenu = false;
-                    app.contextMenuAnimation = 0;
-                } else if (app.showHelp) {
-                    app.showHelp = false;
-                    app.helpAnimation = 0;
-                } else if (app.showSearch) {
-                    closeSearchInput(app);
-                } else if (app.showFolderBrowser) {
-                    app.showFolderBrowser = false;
-                    app.folderBrowserAnimation = 0;
-                } else if (app.showToc) {
-                    if (!app.tocFilter.empty()) {
-                        app.tocFilter.clear();  // first Esc clears the filter
-                    } else {
-                        app.showToc = false;
-                        app.tocAnimation = 0;
-                    }
-                } else if (app.showThemeChooser) {
-                    if (app.themeChooserPreviewBase >= 0) {
-                        applyTheme(app, app.themeChooserPreviewBase);
-                        app.themeChooserPreviewBase = -1;
-                    }
-                    app.showThemeChooser = false;
-                    app.themeChooserAnimation = 0;
-                } else if (app.zenMode) {
-                    toggleZenMode(app, hwnd);
-                } else {
-                    // GoHome: a document returns to the fixed Home tab when
-                    // the window has one. Document-only windows keep the
-                    // bottom of the stack as a no-op. Quit is explicit:
-                    // Q, the window close button, or Alt+F4.
-                    for (int i = 0; i < (int)app.tabs.size(); i++) {
-                        if (!app.tabs[i].home) continue;
-                        tabActivate(app, hwnd, i);
+            case VK_ESCAPE: {
+                // One question, one answer: the topmost layer owns Esc
+                // (include/escape.h). This switch only applies that answer.
+                switch (escOwner) {
+                    case esc::Layer::ContextMenu:
+                        app.showContextMenu = false;
+                        app.contextMenuAnimation = 0;
                         break;
-                    }
+                    case esc::Layer::Help:
+                        app.showHelp = false;
+                        app.helpAnimation = 0;
+                        break;
+                    case esc::Layer::Search:
+                        closeSearchInput(app);
+                        break;
+                    case esc::Layer::FolderBrowserInput:
+                        closeFolderBrowserInput(app);
+                        break;
+                    case esc::Layer::FolderBrowser:
+                        app.showFolderBrowser = false;
+                        app.folderBrowserAnimation = 0;
+                        break;
+                    case esc::Layer::Toc:
+                        if (!app.tocFilter.empty()) {
+                            app.tocFilter.clear();  // first Esc clears the filter
+                        } else {
+                            app.showToc = false;
+                            app.tocAnimation = 0;
+                        }
+                        break;
+                    case esc::Layer::ThemeChooser:
+                        if (app.themeChooserPreviewBase >= 0) {
+                            applyTheme(app, app.themeChooserPreviewBase);
+                            app.themeChooserPreviewBase = -1;
+                        }
+                        app.showThemeChooser = false;
+                        app.themeChooserAnimation = 0;
+                        break;
+                    case esc::Layer::Zen:
+                        toggleZenMode(app, hwnd);
+                        break;
+                    case esc::Layer::Reader:
+                        // GoHome: a document returns to the fixed Home tab when
+                        // the window has one. Document-only windows keep the
+                        // bottom of the stack as a no-op. Quit is explicit:
+                        // Q, the window close button, or Alt+F4.
+                        for (int i = 0; i < (int)app.tabs.size(); i++) {
+                            if (!app.tabs[i].home) continue;
+                            tabActivate(app, hwnd, i);
+                            break;
+                        }
+                        break;
+                    default:
+                        // Home / picker: bottom of the stack, consume and stay.
+                        break;
                 }
                 break;
+            }
             case VK_F11:
                 toggleZenMode(app, hwnd);
                 break;
@@ -4138,56 +4205,16 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 }
                 break;
             case 'N':
-                // New file: folder browser with the naming row active (#74)
+                // New file: the folder browser is gone, so this is a quick note.
                 if (!app.showSearch && !app.showThemeChooser) {
-                    startNewFileFlow(app, hwnd);
+                    tabOpenQuickNote(app, hwnd);
                 }
                 break;
             case 'B':
-                // B to toggle folder browser - an open TOC no longer
-                // blocks it; an unpinned TOC swallows B as filter input
-                // before this switch anyway
-                if (!app.showSearch && !app.showThemeChooser) {
-                    app.showFolderBrowser = !app.showFolderBrowser;
-                    closeFolderBrowserInput(app);
-                    if (app.showFolderBrowser) {
-                        app.folderBrowserAnimation = 0;
-                        // Initialize to directory of current file, or the launch folder
-                        if (!app.currentFile.empty()) {
-                            app.folderBrowserPath = getDirectoryFromFile(app.currentFile);
-                        } else {
-                            app.folderBrowserPath = launchDirectory();
-                        }
-                        populateFolderItems(app);
-                        if (app.browserFocusPath) {
-                            // #81: open with the path box active and
-                            // selected, so paste + Enter jumps anywhere
-                            app.folderBrowserEditingPath = true;
-                            app.folderBrowserInput = app.folderBrowserPath;
-                            app.folderBrowserInputSelectAll = true;
-                            app.folderBrowserInputError = false;
-                            app.folderInputJustOpened = true;
-                            updateBlinkTimer(app);
-                            resetCursorBlink(app);
-                        }
-                    }
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                }
+                // The folder browser panel is gone; B no longer opens it.
                 break;
             case VK_TAB:
-                // The browser no longer blocks the TOC: both panels can
-                // be up (and pinned) together (#156)
-                if (!app.showSearch && !app.showThemeChooser) {
-                    app.showToc = !app.showToc;
-                    app.tocFilter.clear();
-                    if (app.showToc) {
-                        ensureLayoutComplete(app);  // headings list is built during layout
-                        app.tocAnimation = 0;
-                        app.tocScroll = 0;
-                        app.hoveredTocIndex = -1;
-                    }
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                }
+                // The contents panel is gone; Tab no longer toggles it.
                 break;
             case 'T':
                 if (!app.showSearch) {
@@ -4307,11 +4334,13 @@ void handleCharInput(App& app, HWND hwnd, WPARAM wParam) {
     if (app.showPrintPreview) return;
 
     // Shortcut editor: punctuation bindings arrive here (their virtual
-    // keys are layout-dependent); letters/digits were taken on keydown
-    if (app.showShortcutEditor) {
+    // keys are layout-dependent); letters/digits were taken on keydown.
+    // The Keys section uses the same capture.
+    if (app.showShortcutEditor ||
+        (app.showSettings && app.settingsSection == settingskeys::SectionKeys)) {
         wchar_t ch = (wchar_t)wParam;
-        if (app.shortcutEditorRow >= 0 && ch > 32 && ch < 127 &&
-            !iswalnum(ch)) {
+        if (app.shortcutEditorRow >= 0 &&
+            settingskeys::acceptsCaptureChar((unsigned)ch) && !iswalnum(ch)) {
             shortcutAssign(app, {(unsigned)ch, true});
             InvalidateRect(hwnd, nullptr, FALSE);
         }

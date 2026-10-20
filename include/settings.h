@@ -5,6 +5,9 @@
 
 std::wstring getSettingsPath();
 bool saveSettings(const Settings& settings);
+// Save and, when the write fails, say so in the window instead of dropping
+// the failure (invariant 7: a failed settings write must be visible).
+bool saveSettingsReported(App& app, const Settings& settings);
 Settings loadSettings();
 
 // Reading position memory (#77): most-recent-first list capped in remember.
@@ -22,17 +25,17 @@ void persistRecentFile(const std::string& path);
 void clearRecentFiles();
 
 // Theme changes persist immediately so new windows spawn in the same look
-void persistThemeChoice(const App& app);
+void persistThemeChoice(App& app);
 // Editor mode pill choice (and the assists switch) persist immediately
-void persistEditorMode(const App& app);
-void persistWordCount(const App& app);
-void persistEditorCentering(const App& app);
-void persistCloseKeepsDrafts(const App& app);
+void persistEditorMode(App& app);
+void persistWordCount(App& app);
+void persistEditorCentering(App& app);
+void persistCloseKeepsDrafts(App& app);
 // Print margins persist when picked in the preview (#257)
-void persistPrintMargin(const App& app);
-void persistSearchScopes(const App& app);
-void persistOpenInTabs(const App& app);
-bool persistStartupMode(const App& app);
+void persistPrintMargin(App& app);
+void persistSearchScopes(App& app);
+void persistOpenInTabs(App& app);
+bool persistStartupMode(App& app);
 
 // The configuration home: the exe's folder in portable mode (a
 // settings.ini beside tinta.exe opts in, #147), else %APPDATA%\Tinta

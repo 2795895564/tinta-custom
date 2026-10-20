@@ -4,11 +4,9 @@
 #include "app.h"
 
 void renderSearchOverlay(App& app);
-void renderFolderBrowser(App& app);
 // Folder-browser item under a client point (-1 = none); shares the
 // renderer's geometry so click handling never trusts stale hover state
 int folderItemIndexAt(const App& app, float x, float y);
-void renderToc(App& app);
 void renderThemeChooser(App& app);
 // Chooser grid geometry, shared between render and hit-testing: rows in the
 // taller column (never below the built-in 5), and a theme's cell position
@@ -21,31 +19,7 @@ void renderPrintPreview(App& app);
 
 // Settings overlay (Ctrl+,). Render stores (rect, action) pairs in
 // app.settingsHits; handleMouseUp resolves them against these ids.
-enum SettingsAction {
-    SET_NONE = 0,
-    SET_SECTION_GENERAL, SET_SECTION_APPEARANCE, SET_SECTION_EDITOR, SET_SECTION_FRONTMATTER,
-    SET_TOGGLE_FOLLOW, SET_TOGGLE_FOLDERSEARCH, SET_TOGGLE_BROWSEFOCUS,
-    SET_TOGGLE_OPENTABS, SET_TOGGLE_HEADRULES,
-    SET_TOGGLE_WRAP, SET_TOGGLE_PREVIEW, SET_TOGGLE_CENTER_CARET,
-    SET_TOGGLE_ASSISTS,
-    SET_TOGGLE_WORDCOUNT, SET_TOGGLE_CLOSE_DRAFTS,
-    SET_LOCATE_PANDOC,
-    SET_LOCATE_PLANTUML,
-    SET_SLIDER_READING, SET_SLIDER_ZEN, SET_SLIDER_CARET,
-    SET_OPEN_THEMES, SET_NEW_THEME, SET_EDIT_THEME,
-    SET_OPEN_INI, SET_OPEN_THEMES_INI,
-    SET_TOC_LEFT, SET_TOC_RIGHT,
-    SET_LANG_DROPDOWN, SET_OPEN_LANGS_INI,
-    SET_KEYS_DROPDOWN, SET_EDIT_KEYS,
-    SET_CLOSE,
-    SET_STARTUP_LAST, SET_STARTUP_PICKER,
-    // Language picks encode as SET_LANG_PICK_BASE + i: 0 = Auto, then the
-    // registry languages in order (the list is dynamic via languages.ini)
-    SET_LANG_PICK_BASE = 1000,
-    // Shortcut profile picks: SET_KEYS_PICK_BASE + profile index, with
-    // KEY_PROFILE_COUNT meaning the custom [Keys] profile
-    SET_KEYS_PICK_BASE = 2000,
-};
+#include "settings_actions.h"
 // TOC panel X for the configured side at the current animation state;
 // geometry shared between render and the input hit tests
 float tocPanelX(const App& app, float panelWidth);

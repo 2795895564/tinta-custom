@@ -1033,10 +1033,8 @@ render_document:
 
     // Render overlays (search overlay handled separately for edit mode)
     if (app.showSearch && !app.editMode) renderSearchOverlay(app);
-    if (app.showFolderBrowser) renderFolderBrowser(app);
-    // The Contents slot: the outline, or the search results (#246)
+    // The Contents slot now only shows folder search results (#246)
     if (app.showSearchPanel) renderSearchPanel(app);
-    else if (app.showToc) renderToc(app);
     if (app.annotEditorOpen) renderAnnotationEditor(app);
 
     // Close edit mode split view clipping
@@ -1929,9 +1927,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 settings.editorCenterCaret = app->editorCenterCaret;
                 settings.editorCaretCenterRatio = app->editorCaretCenterRatio;
                 settings.headingRules = app->headingRules;
-                settings.tocOnLeft = app->tocOnLeft;
-                settings.tocPinned = app->tocPinned;
-                settings.browserPinned = app->browserPinned;
                 settings.language = app->languageSetting >= 0
                     ? languageIdAt(app->languageSetting) : "auto";
                 settings.keyProfile = app->keyProfile;
@@ -2042,11 +2037,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     app.readingWidthPct = savedSettings.readingWidthPct;
     app.zenWidthPct = savedSettings.zenWidthPct;
     app.headingRules = savedSettings.headingRules;
-    app.tocOnLeft = savedSettings.tocOnLeft;
-    app.tocPinned = savedSettings.tocPinned;
-    app.browserPinned = savedSettings.browserPinned;
-    app.tocWidth = savedSettings.tocWidth;
-    app.browserWidth = savedSettings.browserWidth;
     app.languageSetting = savedSettings.language == "auto"
         ? -1 : languageIndexById(savedSettings.language);
     app.currentLanguageIndex = app.languageSetting >= 0
@@ -2475,24 +2465,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // Pinned side panels are part of the layout, so they come back on
     // launch when a document is up (#156). The start page, quick notes,
     // and --edit launches keep their clean slate; T/B still toggle.
-    if (!app.currentFile.empty() && !app.editMode) {
-        if (app.tocPinned) {
-            app.showToc = true;
-            app.tocAnimation = 1.0f;  // docked: no slide on restore
-            app.tocScroll = 0;
-            app.tocFilter.clear();
-            app.hoveredTocIndex = -1;
-        }
-        if (app.browserPinned) {
-            app.showFolderBrowser = true;
-            app.folderBrowserAnimation = 1.0f;
-            app.folderBrowserPath = getDirectoryFromFile(app.currentFile);
-            populateFolderItems(app);
-        }
-        if (app.tocPinned || app.browserPinned) {
-            InvalidateRect(app.hwnd, nullptr, FALSE);
-        }
-    }
+    // (The Contents and Browser panels were removed; nothing to restore.)
+
 
     // First frame is on screen — now pay for the GPU in the background
     startGpuWarmup();

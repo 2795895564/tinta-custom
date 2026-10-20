@@ -12,8 +12,6 @@ const std::vector<ContextMenuEntry>& contextMenuEntries(const App& app) {
         {CTX_EXPORT, "ctx.export", L"", false},
         {CTX_EDIT, "ctx.edit", L"", false},
         {CTX_SEARCH, "ctx.search", L"", false},
-        {CTX_TOC, "ctx.toc", L"", true},
-        {CTX_BROWSE, "ctx.browse", L"", false},
         {CTX_COPY_PATH, "tab.menu.copy_path", L"", false},
         {CTX_REVEAL, "ctx.reveal", L"", true},
         {CTX_THEME, "ctx.theme", L"", false},

@@ -411,10 +411,6 @@ void closeSearchPanel(App& app) {
     if (!app.showSearchPanel) return;
     app.showSearchPanel = false;
     clearFolderSearch(app);
-    if (app.searchPanelRestoreToc && !app.editMode) {
-        app.showToc = true;
-        app.tocAnimation = 1.0f;
-    }
     app.searchPanelRestoreToc = false;
     if (app.hwnd) InvalidateRect(app.hwnd, nullptr, FALSE);
 }
